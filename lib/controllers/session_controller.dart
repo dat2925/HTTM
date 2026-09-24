@@ -30,12 +30,7 @@ class SessionController {
   }) : _frameSource = frameSource ?? FrameSource(),
        _detectionService = detectionService ?? AiDetectionService(),
        _reasoningService = reasoningService ?? ObstacleReasoningService(),
-       _routeService =
-           routeService ??
-           GeolocatorRouteService(
-             destinationLat: AiConfig.demoDestinationLat,
-             destinationLng: AiConfig.demoDestinationLng,
-           ),
+       _routeService = routeService ?? OsrmRouteService(),
        _voiceService = voiceService ?? VoiceService(),
        _ttsService = ttsService ?? TtsService(),
        _geocodingService = geocodingService ?? GeocodingService();
@@ -80,6 +75,11 @@ class SessionController {
       _lastRoute = instruction;
     });
     _routeService.start();
+    // Demo default destination; a spoken "đi đến ..." command overrides it.
+    _routeService.setDestination(
+      AiConfig.demoDestinationLat,
+      AiConfig.demoDestinationLng,
+    );
   }
 
   Future<bool> start() async {

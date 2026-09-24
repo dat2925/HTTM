@@ -6,6 +6,9 @@ import 'dart:async';
 
 import 'package:geolocator/geolocator.dart';
 
+import '../models/waypoint.dart';
+import 'route_planning_service.dart';
+
 class RouteInstruction {
   const RouteInstruction({required this.text, required this.remainingMeters});
 
@@ -117,6 +120,138 @@ class GeolocatorRouteService implements RouteService {
   @override
   void dispose() {
     stop();
+    _controller.close();
+  }
+}
+
+/// Real turn-by-turn route following: fetches a waypoint list from
+/// `ai_server`'s OSRM proxy (see [RoutePlanningService]) and advances
+/// through it as the real GPS position gets close to each maneuver point.
+/// Idle (no instructions) until [setDestination] resolves a route.
+class OsrmRouteService implements RouteService {
+  OsrmRouteService({RoutePlanningService? planningService})
+    : _planningService = planningService ?? RoutePlanningService();
+
+  static const double _arrivalThresholdMeters = 15;
+  static const double _approachingThresholdMeters = 20;
+
+  final RoutePlanningService _planningService;
+  final StreamController<RouteInstruction> _controller =
+      StreamController<RouteInstruction>.broadcast();
+  StreamSubscription<Position>? _positionSubscription;
+
+  List<Waypoint> _waypoints = const [];
+  int _currentIndex = 0;
+
+  @override
+  Stream<RouteInstruction> get instructions => _controller.stream;
+
+  @override
+  void start() {
+    if (_positionSubscription != null) return;
+    unawaited(_startWhenPermitted());
+  }
+
+  Future<void> _startWhenPermitted() async {
+    var permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return;
+    }
+    if (!await Geolocator.isLocationServiceEnabled()) return;
+
+    _positionSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 2,
+      ),
+    ).listen(_onPosition, onError: (_) {});
+  }
+
+  @override
+  void setDestination(double lat, double lng) {
+    unawaited(_planRoute(lat, lng));
+  }
+
+  Future<void> _planRoute(double lat, double lng) async {
+    Position from;
+    try {
+      from = await Geolocator.getCurrentPosition();
+    } catch (_) {
+      return;
+    }
+    try {
+      final waypoints = await _planningService.plan(
+        fromLat: from.latitude,
+        fromLng: from.longitude,
+        toLat: lat,
+        toLng: lng,
+      );
+      _waypoints = waypoints;
+      _currentIndex = 0;
+      _emitCurrent(from);
+    } on RoutePlanningException {
+      // Keep whatever route was already active; SessionController reports
+      // the geocode/route failure to the user via TTS separately.
+    }
+  }
+
+  void _onPosition(Position position) {
+    if (_waypoints.isEmpty) return;
+    _advanceIfArrived(position);
+    _emitCurrent(position);
+  }
+
+  void _advanceIfArrived(Position position) {
+    while (_currentIndex < _waypoints.length - 1) {
+      final next = _waypoints[_currentIndex + 1];
+      final distanceToNext = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        next.lat,
+        next.lng,
+      );
+      if (distanceToNext > _arrivalThresholdMeters) break;
+      _currentIndex++;
+    }
+  }
+
+  void _emitCurrent(Position position) {
+    final isLast = _currentIndex == _waypoints.length - 1;
+    final current = _waypoints[_currentIndex];
+    if (isLast) {
+      _controller.add(
+        RouteInstruction(text: current.instruction, remainingMeters: 0),
+      );
+      return;
+    }
+
+    final next = _waypoints[_currentIndex + 1];
+    final remaining = Geolocator.distanceBetween(
+      position.latitude,
+      position.longitude,
+      next.lat,
+      next.lng,
+    );
+    final text = remaining <= _approachingThresholdMeters
+        ? '${next.instruction} sau ${remaining.round()} m'
+        : '${current.instruction} · còn ${remaining.round()} m';
+    _controller.add(RouteInstruction(text: text, remainingMeters: remaining));
+  }
+
+  @override
+  void stop() {
+    _positionSubscription?.cancel();
+    _positionSubscription = null;
+  }
+
+  @override
+  void dispose() {
+    stop();
+    _planningService.dispose();
     _controller.close();
   }
 }

@@ -89,19 +89,19 @@ perception quyết định *có an toàn để thực hiện mục tiêu đó kh
 | Speech-to-Text thật (ghi nhận văn bản) | [lib/services/voice_service.dart](../lib/services/voice_service.dart) | Trả text; đã nối sang geocoding (xem Giai đoạn A) |
 | Cấu hình qua `.env` | [lib/config/ai_config.dart](../lib/config/ai_config.dart), `pubspec.yaml` | `flutter_dotenv` |
 | Geocoding thật (giọng nói → tọa độ) | [ai_server/geocoder.py](../ai_server/geocoder.py) (`/geocode`, proxy Nominatim), [lib/services/geocoding_service.dart](../lib/services/geocoding_service.dart), [lib/models/placemark.dart](../lib/models/placemark.dart) | `SessionController.onTalkEnd` tách tiền tố ý định ("đi đến", "dẫn tôi tới", ...) rồi geocode và gọi `RouteService.setDestination` |
+| Route Planning + Waypoint thật (OSRM) | [ai_server/routing.py](../ai_server/routing.py) (`/route`), [lib/services/route_planning_service.dart](../lib/services/route_planning_service.dart), [lib/models/waypoint.dart](../lib/models/waypoint.dart) | Route thật theo đường (profile `driving` trên OSRM demo — chưa có profile đi bộ, xem giới hạn ở mục 4.2) |
+| Route Following thật | `OsrmRouteService` trong [lib/services/route_service.dart](../lib/services/route_service.dart) | So khoảng cách GPS thật tới từng waypoint để tự chuyển sang hướng dẫn kế tiếp, phát "Sắp ..." khi gần điểm rẽ, "Đã đến nơi" ở waypoint cuối |
 
 ### 4.2. Heuristic demo — có thật một phần, chưa đúng bản chất kiến trúc
 
 | Thành phần | File | Giới hạn hiện tại |
 |---|---|---|
 | "Depth"/mức nguy hiểm | [ai_server/detector.py](../ai_server/detector.py) `danger_for()` | Suy ra từ **diện tích bounding box**, không phải Depth Map thật (không có Monocular Depth Estimation) |
-| "Route" | `GeolocatorRouteService` trong [route_service.dart](../lib/services/route_service.dart) | Chỉ so bearing GPS tới **1 tọa độ đích cố định** (`AiConfig.demoDestinationLat/Lng`), suy ra "đi thẳng/rẽ trái/rẽ phải" — không có route/waypoint/OSRM thật, không có turn-by-turn |
+| "Route" theo profile ô tô, chưa phải đi bộ | `OsrmRouteService` trong [route_service.dart](../lib/services/route_service.dart) | Waypoint/turn-by-turn là thật (qua OSRM), nhưng OSRM demo server public chỉ có profile `driving` (đi theo đường xe, không phải vỉa hè) — xem comment đầu [ai_server/routing.py](../ai_server/routing.py). `GeolocatorRouteService` (bearing-tới-1-điểm) vẫn được giữ làm fallback không cần mạng/OSRM |
 | Voice → điểm đến | `voice_service.dart` + `SessionController.onTalkEnd` | Hiển thị text nhận dạng được ở dòng phụ, **không** geocode, **không** đặt làm đích cho `RouteService` |
 
 ### 4.3. Chưa tồn tại
 
-- Route Planning thật (OSRM/GraphHopper + dữ liệu OSM), Waypoint list: không có.
-- Route Following (so sánh vị trí hiện tại với waypoint → "đúng hướng/sắp rẽ/đã đến/lệch tuyến"): không có — hiện chỉ có duy nhất "đi thẳng/rẽ trái/rẽ phải" tới 1 điểm.
 - Monocular Depth Estimation (MiDaS/Depth Anything V2 Small) + Depth Map: không có.
 - Walkable Area Detection từ gradient/normal vector: không có — mức nguy hiểm hiện suy từ diện tích box.
 - Kết hợp Route ↔ Obstacle Reasoner để **chủ động đổi hành vi route** (ví dụ: route bảo đi thẳng nhưng camera thấy chắn hết vỉa hè → gợi ý né trái/phải): hiện `SessionController` chỉ **hiển thị song song** hai dòng "Route: ... · Camera: ..." chứ chưa có logic quyết định.
@@ -137,20 +137,32 @@ nguyên các phần đã có, chỉ thay thế heuristic bằng thành phần th
   tiền tố cứng; xác nhận lại địa điểm với người dùng trước khi đặt làm đích
   (hiện đặt đích ngay khi geocode thành công).
 
-### Giai đoạn B — Route Planning + Waypoint thật (thay `GeolocatorRouteService`)
-- Thêm endpoint `/route?from=&to=` trên `ai_server`, proxy tới OSRM (tự host
-  bằng Docker + dữ liệu OSM khu vực demo, hoặc dùng OSRM demo server công khai
-  cho giai đoạn phát triển).
-- `lib/models/waypoint.dart`: `{lat, lng, distanceMeters, instructionText}`.
-- `lib/services/route_service.dart`: thêm `OsrmRouteService implements
-  RouteService` — gọi `/route`, parse thành `List<Waypoint>`, giữ
-  `GeolocatorRouteService` cũ lại làm fallback/demo khi không có mạng.
-- **Route Following** (thuật toán #8): thêm `RouteFollower` so vị trí GPS
-  hiện tại với waypoint tiếp theo → trạng thái `onTrack / approachingTurn /
-  arrivedWaypoint / offRoute`. Đây là phần thay cho khối "so bearing tới 1
-  điểm" hiện tại.
-- Tiêu chí xong: đặt điểm đến thật → nghe hướng dẫn theo từng waypoint, không
-  phải chỉ 1 hướng cố định.
+### Giai đoạn B — Route Planning + Waypoint thật ✅ Đã triển khai
+- `ai_server/routing.py` + endpoint `GET /route?from_lat=&from_lng=&to_lat=&to_lng=`
+  trong [main.py](../ai_server/main.py): proxy OSRM demo server công khai
+  (`router.project-osrm.org`, profile `driving` — public demo không còn phục
+  vụ profile đi bộ), dịch `maneuver.type/modifier` sang câu tiếng Việt ngắn
+  ("Rẽ trái", "Đi thẳng", "Đã đến nơi", ...), trả `List<Waypoint>`.
+- [lib/models/waypoint.dart](../lib/models/waypoint.dart) +
+  [lib/services/route_planning_service.dart](../lib/services/route_planning_service.dart):
+  gọi `/route`, parse JSON.
+- `OsrmRouteService implements RouteService` trong
+  [lib/services/route_service.dart](../lib/services/route_service.dart):
+  **Route Following thật** (thuật toán #8) — theo dõi `Geolocator.getPositionStream`,
+  so khoảng cách GPS thật tới toạ độ waypoint kế tiếp; khi < 15 m thì coi là
+  đã tới và chuyển sang chỉ dẫn của waypoint đó; khi còn ≤ 20 m thì phát
+  trước "chỉ dẫn kế tiếp sau N m" (giống ví dụ "Sắp đến giao lộ." trong bản
+  thiết kế); ở waypoint cuối phát "Đã đến nơi". `GeolocatorRouteService`
+  (heuristic bearing-tới-1-điểm) được giữ nguyên làm lựa chọn thay thế không
+  cần OSRM/mạng.
+- `SessionController` đổi implementation mặc định sang `OsrmRouteService`
+  và gọi `setDestination` với điểm đến demo ngay từ `initialize()`, để luôn
+  có 1 tuyến chạy sẵn trước khi người dùng nói — nói "đi đến ..." sẽ gọi lại
+  `setDestination` với điểm đến mới (đã nối ở Giai đoạn A).
+- Còn thiếu để hoàn chỉnh: chưa có state `offRoute` tường minh (chỉ có
+  `onTrack`/`approachingTurn`/`arrived` qua khoảng cách tới waypoint kế
+  tiếp) — việc phát hiện lệch tuyến và re-route thật để ở Giai đoạn E; chưa
+  self-host OSRM với profile đi bộ nên tuyến vẫn đi theo đường ô tô.
 
 ### Giai đoạn C — Kết hợp Route và Obstacle Reasoner (Decision Fusion)
 - Trong `SessionController`, thay việc chỉ nối 2 dòng text bằng một hàm quyết

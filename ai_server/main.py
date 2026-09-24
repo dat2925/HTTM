@@ -12,6 +12,7 @@ from PIL import Image, UnidentifiedImageError
 
 from detector import YoloObstacleDetector
 from geocoder import GeocodeError, geocode
+from routing import RouteError, plan_route
 
 
 logging.basicConfig(level=logging.INFO)
@@ -74,3 +75,15 @@ async def geocode_place(q: str) -> dict[str, object]:
         logger.warning("Geocode failed for query=%r: %s", q, error)
         raise HTTPException(status_code=404, detail=str(error)) from error
     return {"success": True, **place}
+
+
+@app.get("/route")
+async def get_route(
+    from_lat: float, from_lng: float, to_lat: float, to_lng: float
+) -> dict[str, object]:
+    try:
+        result = await plan_route(from_lat, from_lng, to_lat, to_lng)
+    except RouteError as error:
+        logger.warning("Routing failed: %s", error)
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return {"success": True, **result}
