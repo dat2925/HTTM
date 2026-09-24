@@ -1,15 +1,19 @@
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 class AiConfig {
   AiConfig._();
 
-  /// Override without changing source code:
-  /// flutter run --dart-define=AI_SERVER_URL=http://192.168.1.10:8000
-  static const String serverUrl = String.fromEnvironment(
-    'AI_SERVER_URL',
-    defaultValue: 'http://172.11.42.144:8000',
-  );
+  /// Read the server URL from the .env file.
+  static String get serverUrl =>
+      dotenv.env['AI_SERVER_URL'] ?? 'http://172.11.42.144:8000';
 
   static const Duration captureInterval = Duration(milliseconds: 900);
   static const Duration requestTimeout = Duration(seconds: 12);
   static const Duration warningCooldown = Duration(seconds: 3);
   static const int safeCyclesRequired = 3;
+
+  /// Demo destination for the GPS route heuristic (no real Directions API
+  /// backend exists yet).
+  static const double demoDestinationLat = 21.0285;
+  static const double demoDestinationLng = 105.8542;
 }

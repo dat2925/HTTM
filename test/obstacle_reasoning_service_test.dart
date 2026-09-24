@@ -9,6 +9,10 @@ void main() {
     position: 'center',
     danger: DangerLevel.medium,
     areaRatio: 0.1,
+    x1: 100,
+    y1: 100,
+    x2: 200,
+    y2: 300,
   );
   const leftHigh = DetectedObject(
     className: 'car',
@@ -16,6 +20,10 @@ void main() {
     position: 'left',
     danger: DangerLevel.high,
     areaRatio: 0.2,
+    x1: 0,
+    y1: 50,
+    x2: 150,
+    y2: 250,
   );
 
   test('center priority bonus selects the centered obstacle', () {
