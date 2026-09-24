@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, UnidentifiedImageError
 
 from detector import YoloObstacleDetector
+from geocoder import GeocodeError, geocode
 
 
 logging.basicConfig(level=logging.INFO)
@@ -63,3 +64,13 @@ async def detect(image: UploadFile = File(...)) -> dict[str, object]:
         "image_height": height,
         "objects": objects,
     }
+
+
+@app.get("/geocode")
+async def geocode_place(q: str) -> dict[str, object]:
+    try:
+        place = await geocode(q)
+    except GeocodeError as error:
+        logger.warning("Geocode failed for query=%r: %s", q, error)
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return {"success": True, **place}

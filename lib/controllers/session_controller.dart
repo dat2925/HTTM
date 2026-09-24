@@ -10,6 +10,7 @@ import '../models/perception_frame.dart';
 import '../models/session_state.dart';
 import '../services/ai_detection_service.dart';
 import '../services/frame_source.dart';
+import '../services/geocoding_service.dart';
 import '../services/obstacle_reasoning_service.dart';
 import '../services/route_service.dart';
 import '../services/tts_service.dart';
@@ -25,6 +26,7 @@ class SessionController {
     RouteService? routeService,
     VoiceService? voiceService,
     TtsService? ttsService,
+    GeocodingService? geocodingService,
   }) : _frameSource = frameSource ?? FrameSource(),
        _detectionService = detectionService ?? AiDetectionService(),
        _reasoningService = reasoningService ?? ObstacleReasoningService(),
@@ -35,7 +37,8 @@ class SessionController {
              destinationLng: AiConfig.demoDestinationLng,
            ),
        _voiceService = voiceService ?? VoiceService(),
-       _ttsService = ttsService ?? TtsService();
+       _ttsService = ttsService ?? TtsService(),
+       _geocodingService = geocodingService ?? GeocodingService();
 
   final FrameSource _frameSource;
   final AiDetectionService _detectionService;
@@ -43,6 +46,7 @@ class SessionController {
   final RouteService _routeService;
   final VoiceService _voiceService;
   final TtsService _ttsService;
+  final GeocodingService _geocodingService;
 
   final StreamController<SessionState> _stateController =
       StreamController<SessionState>.broadcast();
@@ -226,12 +230,67 @@ class SessionController {
     final text = await _voiceService.stopListening();
     _isListening = false;
     _listeningController.add(false);
+    if (text == null || text.trim().isEmpty) {
+      _stateController.add(
+        SessionRunning(statusText: _running ? 'AI đang chạy' : 'AI đã dừng'),
+      );
+      return;
+    }
+
+    final destinationQuery = _destinationFrom(text);
+    if (destinationQuery == null) {
+      _stateController.add(
+        SessionRunning(
+          statusText: _running ? 'AI đang chạy' : 'AI đã dừng',
+          subStatusText: 'Lệnh: $text',
+        ),
+      );
+      return;
+    }
+
     _stateController.add(
       SessionRunning(
         statusText: _running ? 'AI đang chạy' : 'AI đã dừng',
-        subStatusText: text == null ? null : 'Lệnh: $text',
+        subStatusText: 'Đang tìm đường đến $destinationQuery...',
       ),
     );
+    try {
+      final place = await _geocodingService.search(destinationQuery);
+      _routeService.setDestination(place.lat, place.lng);
+      await _ttsService.speak('Đang tìm đường đến $destinationQuery.');
+    } on GeocodingException catch (error) {
+      await _ttsService.speak(error.message);
+      _stateController.add(
+        SessionRunning(
+          statusText: _running ? 'AI đang chạy' : 'AI đã dừng',
+          subStatusText: error.message,
+        ),
+      );
+    }
+  }
+
+  /// Strips a leading "đi đến"/"dẫn tôi đến"-style prefix so only the place
+  /// name is sent to geocoding. Returns null when the phrase carries no
+  /// recognizable destination intent.
+  String? _destinationFrom(String text) {
+    final normalized = text.trim().toLowerCase();
+    const prefixes = [
+      'dẫn tôi đến',
+      'dẫn tôi tới',
+      'đưa tôi đến',
+      'đưa tôi tới',
+      'đi đến',
+      'đi tới',
+      'tới',
+      'đến',
+    ];
+    for (final prefix in prefixes) {
+      if (normalized.startsWith(prefix)) {
+        final rest = text.trim().substring(prefix.length).trim();
+        return rest.isEmpty ? null : rest;
+      }
+    }
+    return null;
   }
 
   bool get isListening => _isListening;
@@ -243,6 +302,7 @@ class SessionController {
     await _frameSource.dispose();
     _detectionService.dispose();
     _voiceService.dispose();
+    _geocodingService.dispose();
     await _ttsService.dispose();
     await _stateController.close();
     await _frameController.close();

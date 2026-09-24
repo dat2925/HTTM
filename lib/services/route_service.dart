@@ -1,3 +1,7 @@
+// Named constructor params below keep a clean public API name instead of
+// matching the private field name, so initializing formals don't apply.
+// ignore_for_file: prefer_initializing_formals
+
 import 'dart:async';
 
 import 'package:geolocator/geolocator.dart';
@@ -13,6 +17,7 @@ abstract class RouteService {
   Stream<RouteInstruction> get instructions;
   void start();
   void stop();
+  void setDestination(double lat, double lng);
   void dispose();
 }
 
@@ -22,12 +27,14 @@ abstract class RouteService {
 /// Not real turn-by-turn guidance.
 class GeolocatorRouteService implements RouteService {
   GeolocatorRouteService({
-    required this.destinationLat,
-    required this.destinationLng,
-  });
+    required double destinationLat,
+    required double destinationLng,
+  }) : _destinationLat = destinationLat,
+       _destinationLng = destinationLng;
 
-  final double destinationLat;
-  final double destinationLng;
+  double _destinationLat;
+  double _destinationLng;
+  Position? _lastPosition;
 
   final StreamController<RouteInstruction> _controller =
       StreamController<RouteInstruction>.broadcast();
@@ -61,18 +68,27 @@ class GeolocatorRouteService implements RouteService {
     ).listen(_onPosition, onError: (_) {});
   }
 
+  @override
+  void setDestination(double lat, double lng) {
+    _destinationLat = lat;
+    _destinationLng = lng;
+    final position = _lastPosition;
+    if (position != null) _onPosition(position);
+  }
+
   void _onPosition(Position position) {
+    _lastPosition = position;
     final distance = Geolocator.distanceBetween(
       position.latitude,
       position.longitude,
-      destinationLat,
-      destinationLng,
+      _destinationLat,
+      _destinationLng,
     );
     final bearingToDestination = Geolocator.bearingBetween(
       position.latitude,
       position.longitude,
-      destinationLat,
-      destinationLng,
+      _destinationLat,
+      _destinationLng,
     );
     final turnText = _turnFor(position.heading, bearingToDestination);
     _controller.add(
