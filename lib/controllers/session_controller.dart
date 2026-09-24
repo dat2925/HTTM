@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../config/ai_config.dart';
 import '../models/detection_result.dart';
 import '../models/perception_frame.dart';
+import '../models/route_progress.dart';
 import '../models/session_state.dart';
 import '../services/ai_detection_service.dart';
 import '../services/frame_source.dart';
@@ -65,6 +66,7 @@ class SessionController {
   Stream<SessionState> get states => _stateController.stream;
   Stream<PerceptionFrame> get frames => _frameController.stream;
   Stream<bool> get listening => _listeningController.stream;
+  Stream<RouteProgress> get routeProgress => _routeService.progress;
   CameraController? get cameraController => _frameSource.controller;
   bool get isRunning => _running;
 

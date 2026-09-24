@@ -6,6 +6,7 @@ import '../models/session_state.dart';
 import '../widgets/perception_preview.dart';
 import '../widgets/status_panel.dart';
 import '../widgets/talk_button.dart';
+import 'route_debug_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, required this.controller});
@@ -62,6 +63,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       appBar: AppBar(
         title: const Text('Smart Navigation'),
         actions: [
+          IconButton(
+            tooltip: 'Route debug',
+            icon: const Icon(Icons.route),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => RouteDebugScreen(controller: widget.controller),
+              ),
+            ),
+          ),
           IconButton(
             tooltip: _demoMode ? 'Chuyển sang Blind mode' : 'Chuyển sang Demo mode',
             icon: Icon(_demoMode ? Icons.visibility : Icons.visibility_off),

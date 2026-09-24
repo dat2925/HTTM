@@ -66,6 +66,7 @@ perception quyết định *có an toàn để thực hiện mục tiêu đó kh
 | Detection | YOLO (hiện: `yolo11n.pt` qua `ai_server`; mục tiêu: YOLO26n) | Nhận dạng vật cản |
 | Walkable area | Gradient + Normal Vector trên Depth Map | Vùng đi được |
 | Vị trí | GPS (`geolocator`) | Vị trí hiện tại |
+| Hướng | La bàn/từ kế (`flutter_compass`) | Hướng thiết bị đang chỉ — hoạt động cả khi đứng yên |
 | Bản đồ | OpenStreetMap | Dữ liệu đường/vỉa hè |
 | Routing | OSRM / GraphHopper | Tính tuyến đường |
 | Voice input | `speech_to_text` | Nhập điểm đến |
@@ -86,11 +87,13 @@ perception quyết định *có an toàn để thực hiện mục tiêu đó kh
 | Temporal debouncing cảnh báo (cooldown 3s + safe-cycle) | [lib/controllers/session_controller.dart](../lib/controllers/session_controller.dart) | Thuật toán #10, đơn giản (cooldown cố định, chưa theo mức nguy hiểm biến thiên) |
 | TTS + Haptic theo mức nguy hiểm | [lib/services/tts_service.dart](../lib/services/tts_service.dart), `session_controller.dart` | Rung mạnh/vừa theo `DangerLevel` |
 | GPS Positioning thật | [lib/services/route_service.dart](../lib/services/route_service.dart) | `Geolocator.getPositionStream` |
+| La bàn thật (hướng thiết bị đang chỉ) | [lib/services/compass_service.dart](../lib/services/compass_service.dart) | `flutter_compass` — đọc trực tiếp từ, hoạt động cả khi đang đứng yên, không như `Position.heading` của GPS (chỉ có khi đang di chuyển) |
 | Speech-to-Text thật (ghi nhận văn bản) | [lib/services/voice_service.dart](../lib/services/voice_service.dart) | Trả text; đã nối sang geocoding (xem Giai đoạn A) |
 | Cấu hình qua `.env` | [lib/config/ai_config.dart](../lib/config/ai_config.dart), `pubspec.yaml` | `flutter_dotenv` |
 | Geocoding thật (giọng nói → tọa độ) | [ai_server/geocoder.py](../ai_server/geocoder.py) (`/geocode`, proxy Nominatim), [lib/services/geocoding_service.dart](../lib/services/geocoding_service.dart), [lib/models/placemark.dart](../lib/models/placemark.dart) | `SessionController.onTalkEnd` tách tiền tố ý định ("đi đến", "dẫn tôi tới", ...) rồi geocode và gọi `RouteService.setDestination` |
 | Route Planning + Waypoint thật (OSRM) | [ai_server/routing.py](../ai_server/routing.py) (`/route`), [lib/services/route_planning_service.dart](../lib/services/route_planning_service.dart), [lib/models/waypoint.dart](../lib/models/waypoint.dart) | Route thật theo đường (profile `driving` trên OSRM demo — chưa có profile đi bộ, xem giới hạn ở mục 4.2) |
 | Route Following thật | `OsrmRouteService` trong [lib/services/route_service.dart](../lib/services/route_service.dart) | So khoảng cách GPS thật tới từng waypoint để tự chuyển sang hướng dẫn kế tiếp, phát "Sắp ..." khi gần điểm rẽ, "Đã đến nơi" ở waypoint cuối |
+| Màn hình debug trực quan cho route | [lib/screens/route_debug_screen.dart](../lib/screens/route_debug_screen.dart), [lib/widgets/route_debug_map.dart](../lib/widgets/route_debug_map.dart), [lib/models/route_progress.dart](../lib/models/route_progress.dart) | Sơ đồ waypoint chiếu từ lat/lng (không phải bản đồ thật), danh sách waypoint đánh dấu bước hiện tại, vị trí GPS thật — mở từ icon route trên `HomeScreen`, không hiển thị cho người dùng khiếm thị |
 
 ### 4.2. Heuristic demo — có thật một phần, chưa đúng bản chất kiến trúc
 
@@ -159,10 +162,25 @@ nguyên các phần đã có, chỉ thay thế heuristic bằng thành phần th
   và gọi `setDestination` với điểm đến demo ngay từ `initialize()`, để luôn
   có 1 tuyến chạy sẵn trước khi người dùng nói — nói "đi đến ..." sẽ gọi lại
   `setDestination` với điểm đến mới (đã nối ở Giai đoạn A).
+- **Sửa lỗ hổng "đứng một chỗ không biết đi hướng nào"**: bản đầu chỉ dùng
+  `Position.heading` (hướng di chuyển suy từ GPS) để quyết định trái/phải,
+  nhưng giá trị này chỉ có khi **đang di chuyển** — lúc đứng yên nó là
+  `NaN` và code cũ mặc định trả về "Đi thẳng", tức là sai/im lặng đúng vào
+  lúc người dùng cần hướng dẫn nhất. [lib/services/compass_service.dart](../lib/services/compass_service.dart)
+  đọc la bàn thật (từ kế) qua `flutter_compass`, có giá trị ngay cả khi
+  đứng yên. Hàm `facingInstruction()` trong
+  [lib/services/route_service.dart](../lib/services/route_service.dart) so
+  hướng la bàn với bearing tới waypoint kế tiếp để trả về "Đi thẳng / Quay
+  sang trái / Quay sang phải / Quay lại" — cả `GeolocatorRouteService` và
+  `OsrmRouteService` đều dùng hàm này, tính lại mỗi khi có sự kiện la bàn
+  mới (không chỉ khi có GPS mới), nên vừa đặt xong đích là có hướng dẫn
+  ngay, không cần bước đi trước.
 - Còn thiếu để hoàn chỉnh: chưa có state `offRoute` tường minh (chỉ có
   `onTrack`/`approachingTurn`/`arrived` qua khoảng cách tới waypoint kế
   tiếp) — việc phát hiện lệch tuyến và re-route thật để ở Giai đoạn E; chưa
-  self-host OSRM với profile đi bộ nên tuyến vẫn đi theo đường ô tô.
+  self-host OSRM với profile đi bộ nên tuyến vẫn đi theo đường ô tô; la bàn
+  điện thoại có thể bị nhiễu từ trường gần kim loại/điện tử nên hướng dẫn
+  "quay sang trái/phải" có thể sai lệch cục bộ — chưa có bước calibrate.
 
 ### Giai đoạn C — Kết hợp Route và Obstacle Reasoner (Decision Fusion)
 - Trong `SessionController`, thay việc chỉ nối 2 dòng text bằng một hàm quyết
