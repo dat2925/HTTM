@@ -5,7 +5,7 @@ class AiConfig {
 
   /// Read the server URL from the .env file.
   static String get serverUrl =>
-      dotenv.env['AI_SERVER_URL'] ?? 'http://172.11.42.144:8000';
+      dotenv.env['AI_SERVER_URL'] ?? 'https://blindnav.xuanthieu.site';
 
   static const Duration captureInterval = Duration(milliseconds: 900);
   static const Duration requestTimeout = Duration(seconds: 12);
