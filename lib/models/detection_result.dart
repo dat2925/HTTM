@@ -21,6 +21,10 @@ class DetectedObject {
     required this.position,
     required this.danger,
     required this.areaRatio,
+    required this.x1,
+    required this.y1,
+    required this.x2,
+    required this.y2,
   });
 
   final String className;
@@ -28,6 +32,10 @@ class DetectedObject {
   final String position;
   final DangerLevel danger;
   final double areaRatio;
+  final double x1;
+  final double y1;
+  final double x2;
+  final double y2;
 
   factory DetectedObject.fromJson(Map<String, dynamic> json) {
     final dangerText = json['danger']?.toString().toLowerCase();
@@ -41,6 +49,10 @@ class DetectedObject {
         _ => DangerLevel.low,
       },
       areaRatio: (json['area_ratio'] as num?)?.toDouble() ?? 0,
+      x1: (json['x1'] as num?)?.toDouble() ?? 0,
+      y1: (json['y1'] as num?)?.toDouble() ?? 0,
+      x2: (json['x2'] as num?)?.toDouble() ?? 0,
+      y2: (json['y2'] as num?)?.toDouble() ?? 0,
     );
   }
 }
