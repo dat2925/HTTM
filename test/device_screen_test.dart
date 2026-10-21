@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_navigation/controllers/session_controller.dart';
@@ -6,6 +8,30 @@ import 'package:smart_navigation/screens/ai_navigation_screen.dart';
 import 'support/device_fakes.dart';
 
 void main() {
+  testWidgets('Stop during initialization cancels the demo automatic start', (
+    tester,
+  ) async {
+    final camera = FakeCamera()..openGate = Completer<void>();
+    final detector = FakeDetector();
+    final session = SessionController(
+      frameSource: camera,
+      detectionService: detector,
+      voiceService: FakeVoice(),
+      ttsService: RecordingTts(),
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: AiNavigationScreen(controller: session)),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Dừng'));
+    camera.openGate!.complete();
+    await tester.pump();
+    expect(session.isRunning, isFalse);
+    expect(detector.requests, 0);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+  });
+
   testWidgets('lifecycle releases camera and restores perception on resume', (
     tester,
   ) async {

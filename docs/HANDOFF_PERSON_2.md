@@ -57,4 +57,6 @@ flutter test
 Test backend mock inference; chưa chạy YOLO với trọng số thật hoặc kiểm tra trên điện thoại.
 Dùng `--dart-define=AI_SERVER_URL=...` để cấu hình server, không dùng `.env`.
 
-Kết quả kiểm tra bản thu gọn: `flutter analyze` không có lỗi; 21 test Flutter và 6 test backend đều đạt.
+Kết quả kiểm tra bản thu gọn: `flutter analyze` không có lỗi; 29 test Flutter và 6 test backend đều đạt.
+Start đang chờ camera bị hủy khi có Stop. Request detection dùng một deadline cho toàn bộ
+upload/header/body và hủy request HTTP khi timeout, tránh giữ vòng nhận diện ở trạng thái chờ.

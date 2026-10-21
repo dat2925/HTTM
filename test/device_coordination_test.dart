@@ -110,6 +110,36 @@ void main() {
     expect(session.cameraError, isNull);
   });
 
+  test(
+    'stop during initial camera opening cancels the pending start',
+    () async {
+      camera.openGate = Completer<void>();
+      final pending = session.start();
+      await flushDeviceEvents();
+      expect(camera.opened, 1);
+      session.stop();
+      camera.openGate!.complete();
+      expect(await pending, isFalse);
+      expect(session.isRunning, isFalse);
+      expect(detector.requests, 0);
+      expect(await session.start(), isTrue);
+    },
+  );
+
+  test('stop during camera recovery cancels the pending start', () async {
+    camera.failOpen = true;
+    await session.initialize();
+    camera.failOpen = false;
+    camera.openGate = Completer<void>();
+    final pending = session.start();
+    await flushDeviceEvents();
+    expect(camera.opened, 2);
+    session.stop();
+    camera.openGate!.complete();
+    expect(await pending, isFalse);
+    expect(detector.requests, 0);
+  });
+
   test('stop during health check cannot start a capture timer', () async {
     detector.healthGate = Completer<bool>();
     final start = session.start();

@@ -115,19 +115,22 @@ class SessionController {
     }
   }
 
+  bool _canStart(int epoch) =>
+      !_disposed &&
+      !_paused &&
+      !_cameraBorrowed &&
+      !_running &&
+      epoch == _epoch;
+
   Future<bool> start() async {
-    if (_disposed || _paused || _cameraBorrowed || _running) return false;
-    await initialize();
-    if (!_camera.isReady && !await _openCamera()) return false;
     final epoch = _epoch;
+    if (!_canStart(epoch)) return false;
+    await initialize();
+    if (!_canStart(epoch)) return false;
+    if (!_camera.isReady && !await _openCamera()) return false;
+    if (!_canStart(epoch)) return false;
     final healthy = await _detector.isHealthy();
-    if (_disposed ||
-        _paused ||
-        _cameraBorrowed ||
-        _running ||
-        epoch != _epoch) {
-      return false;
-    }
+    if (!_canStart(epoch)) return false;
     if (!healthy) {
       cameraError = 'Không kết nối được AI Server.';
       _publish(SessionRunning(statusText: cameraError!));

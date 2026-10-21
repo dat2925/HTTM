@@ -36,7 +36,7 @@ class _AiNavigationScreenState extends State<AiNavigationScreen>
   Future<void> _initialize() async {
     try {
       await _session.initialize();
-      if (mounted && !_backgrounded) {
+      if (mounted && !_backgrounded && _autoStartPending) {
         _autoStartPending = false;
         await _session.start();
       }
@@ -46,6 +46,11 @@ class _AiNavigationScreenState extends State<AiNavigationScreen>
     } finally {
       if (mounted) setState(() => _initializing = false);
     }
+  }
+
+  void _stop() {
+    _autoStartPending = false;
+    _session.stop();
   }
 
   @override
@@ -118,10 +123,7 @@ class _AiNavigationScreenState extends State<AiNavigationScreen>
                       : () => unawaited(_session.start()),
                   child: const Text('Bắt đầu'),
                 ),
-                OutlinedButton(
-                  onPressed: _session.stop,
-                  child: const Text('Dừng'),
-                ),
+                OutlinedButton(onPressed: _stop, child: const Text('Dừng')),
                 if (widget.scanQr != null)
                   OutlinedButton(
                     onPressed: _initializing || _scanning ? null : _scanQr,

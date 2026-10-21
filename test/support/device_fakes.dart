@@ -35,11 +35,13 @@ class FakeCamera extends FrameSource {
   bool ready = false, failOpen = false, failCapture = false;
   int opened = 0, closed = 0, captures = 0;
   Completer<XFile>? captureGate;
+  Completer<void>? openGate;
   @override
   bool get isReady => ready;
   @override
   Future<void> initialize() async {
     opened++;
+    await openGate?.future;
     if (failOpen) throw CameraException('permission', 'No camera');
     ready = true;
   }
