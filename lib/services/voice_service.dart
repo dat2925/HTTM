@@ -75,7 +75,13 @@ class VoiceService {
     );
   }
 
-  void dispose() {
-    _speech.cancel();
+  Future<void> cancelListening() async {
+    final completer = _finalResultCompleter;
+    _finalResultCompleter = null;
+    _lastResult = '';
+    if (completer != null && !completer.isCompleted) completer.complete(null);
+    await _speech.cancel();
   }
+
+  void dispose() => unawaited(cancelListening());
 }

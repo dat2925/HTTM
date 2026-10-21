@@ -1,14 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-import 'controllers/session_controller.dart';
-import 'screens/home_screen.dart';
+import 'screens/ai_navigation_screen.dart';
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-
-  await dotenv.load(fileName: '.env', isOptional: true);
-
   runApp(const SmartNavigationApp());
 }
 
@@ -27,7 +22,7 @@ class SmartNavigationApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: HomeScreen(controller: SessionController()),
+      home: const AiNavigationScreen(),
     );
   }
 }

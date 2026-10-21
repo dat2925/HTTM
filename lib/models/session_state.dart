@@ -2,7 +2,7 @@ import 'detection_result.dart';
 
 /// State driving [StatusPanel]. [statusText] is the big headline;
 /// [subStatusText] shows which stream (route vs. camera) produced the
-/// current decision, so a demo audience can see both loops working.
+/// current device state.
 sealed class SessionState {
   const SessionState({required this.statusText, this.subStatusText});
 
