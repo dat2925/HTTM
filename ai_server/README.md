@@ -1,25 +1,20 @@
-# AI Server
+# Backend nhận diện — Người 2
 
-This service receives JPEG images and returns filtered YOLO detections. It uses
-`yolo11n.pt`, a small pretrained nano model. The weights download automatically
-on the first detection; run one test before the live demonstration.
+`detector.py` chạy YOLO và lọc vật cản; `main.py` là entry point demo chỉ có
+`GET /health` và `POST /detect` (multipart field `image`).
 
 ```powershell
-cd ai_server
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
+python -m pip install -r ai_server/requirements.txt
+python -m uvicorn main:app --app-dir ai_server --host 0.0.0.0 --port 8000
+python -m unittest discover -s ai_server -p "test_*.py"
 ```
 
-Open `http://127.0.0.1:8000/health` and expect `{"status":"ok"}`. Interactive
-API documentation is at `http://127.0.0.1:8000/docs`.
+Chạy các lệnh từ thư mục gốc dự án. Khi tích hợp, Người 3 quản lý entry point
+backend chung và đăng ký `/detect` cùng các module của Người 1/3.
+Bản này không có routing/geocoding hoặc các endpoint trợ lý.
 
-To use another compatible model, set `YOLO_MODEL` before starting the server.
-The current danger value is only a bounding-box area heuristic—not depth.
+Ảnh thiếu trả 422; ảnh rỗng hoặc hỏng trả 400; lỗi inference trả 500 với thông báo ổn định.
+Test endpoint mock detector, không tải trọng số hoặc gọi dịch vụ ngoài.
 
-
-## Optional OpenAI Assistant backend
-
-The `/assistant/*` endpoints are optional and do not change the existing `/detect` API.
-Configure `ai_server/.env` from `.env.example` and run `python ai_server/setup_assistant.py` for pairing setup. Keep `OPENAI_API_KEY` server-side only. Run `python -m unittest discover -s ai_server -p 'test_assistant.py'` and `python -m unittest discover -s ai_server -p 'test_pairing_qr.py'` for focused checks. See the fork's `docs/HANDOFF_OPENAI_ASSISTANT.md` for full setup and security guidance.
+Model mặc định `yolo11n.pt`; đổi qua `YOLO_MODEL` và `YOLO_CONFIDENCE`.
+Mức nguy hiểm dựa trên diện tích bounding box, không phải khoảng cách vật lý.

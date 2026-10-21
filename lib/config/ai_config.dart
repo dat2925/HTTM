@@ -5,7 +5,7 @@ class AiConfig {
   /// flutter run --dart-define=AI_SERVER_URL=http://192.168.1.10:8000
   static const String serverUrl = String.fromEnvironment(
     'AI_SERVER_URL',
-    defaultValue: 'http://172.11.42.144:8000',
+    defaultValue: 'http://10.0.2.2:8000',
   );
 
   static const Duration captureInterval = Duration(milliseconds: 900);

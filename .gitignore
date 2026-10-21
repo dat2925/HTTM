@@ -48,3 +48,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local environments and private configuration
+.venv/
+.venv-ai/
+.venv-server/
+**/.env
+**/.env.*.local
+ai_server/.assistant-state/
+android/.kotlin/

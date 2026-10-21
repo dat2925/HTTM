@@ -1,15 +1,30 @@
-# Smart Navigation for Visually Impaired People
+# Người 2 — YOLO và nền tảng thiết bị
 
-A demo-ready Android Flutter app plus a local FastAPI/YOLO server. The phone
-captures a JPEG roughly every 900 ms, the server detects selected obstacle
-classes, and Flutter prioritizes a Vietnamese TTS and haptic warning.
+Bản bàn giao độc lập cho luồng camera → YOLO → cảnh báo tiếng Việt/rung.
+Chỉ giữ backend nhận diện, camera, STT/TTS, xử lý lệnh và bộ điều phối thiết bị.
 
-See [DEMO_SETUP.md](DEMO_SETUP.md) for installation, network configuration,
-run commands, pre-demo checks, scenarios, and the MVP's academic limitations.
+Không chứa GPS/bản đồ/tìm tuyến, hội thoại AI, pairing/token hoặc triển khai trợ lý.
+Các phần đó do Người 1 và Người 3 đưa vào dự án chung bằng commit của họ.
 
-Current pipeline:
+## Chạy
 
-`Camera -> HTTP -> YOLO11n -> bounding-box heuristic -> TTS/haptics`
+```powershell
+python -m pip install -r ai_server/requirements.txt
+python -m uvicorn main:app --app-dir ai_server --host 0.0.0.0 --port 8000
+flutter pub get
+flutter run --dart-define=AI_SERVER_URL=http://192.168.1.100:8000
+```
 
-The bounding-box heuristic is not depth estimation. The planned production
-replacement is monocular depth estimation plus walkable-area reasoning.
+Thay IP mẫu bằng IP máy chạy YOLO; mặc định `10.0.2.2:8000` dành cho Android emulator.
+Cho phép camera và micro trên điện thoại. `.env` không được dùng trong bản này.
+Lần nhận diện đầu có thể tải trọng số `yolo11n.pt`.
+
+## Kiểm tra
+
+```powershell
+flutter analyze
+flutter test
+python -m unittest discover -s ai_server -p "test_*.py"
+```
+
+Xem [bàn giao Người 2](docs/HANDOFF_PERSON_2.md) để nối bộ điều phối với code của hai thành viên còn lại.
