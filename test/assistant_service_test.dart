@@ -32,7 +32,128 @@ http.Response chatReply(http.Request request) => http.Response(
   headers: {'content-type': 'application/json; charset=utf-8'},
 );
 
+class DelayedCredentials extends MemoryCredentials {
+  final savingToken = Completer<void>();
+  final releaseToken = Completer<void>();
+  bool delayed = false;
+
+  @override
+  Future<void> write(String server, Map<String, dynamic> value) async {
+    if (!delayed && value['token'] != null) {
+      delayed = true;
+      savingToken.complete();
+      await releaseToken.future;
+    }
+    await super.write(server, value);
+  }
+}
+
 void main() {
+  test(
+    'new enrollment waits until the previous server revocation finishes',
+    () async {
+      final revoke = Completer<http.Response>();
+      var enrollments = 0;
+      final service = AiAssistantService(
+        credentials: MemoryCredentials(),
+        serverUrl: () => 'https://backend.example',
+        clientFactory: () => MockClient((request) async {
+          if (request.url.path.endsWith('/unpair')) return revoke.future;
+          enrollments++;
+          return pairedReply();
+        }),
+      );
+      addTearDown(service.dispose);
+      await service.pair('test-enrollment-code');
+      final unpairing = service.unpair();
+      final pairing = service.pair('test-enrollment-code');
+      await Future<void>.delayed(Duration.zero);
+      expect(enrollments, 1);
+      revoke.complete(http.Response('{}', 200));
+      await Future.wait([pairing, unpairing]);
+      expect(enrollments, 2);
+      expect(service.paired, isTrue);
+    },
+  );
+
+  test(
+    'unpair rejects a late enrollment response without saving its token',
+    () async {
+      final pending = Completer<http.Response>();
+      final requested = Completer<void>();
+      final credentials = MemoryCredentials();
+      final service = AiAssistantService(
+        credentials: credentials,
+        serverUrl: () => 'https://backend.example',
+        clientFactory: () => MockClient((_) async {
+          requested.complete();
+          return pending.future;
+        }),
+      );
+      addTearDown(service.dispose);
+      final pairing = service.pair('test-enrollment-code');
+      final rejected = expectLater(
+        pairing,
+        throwsA(
+          isA<AssistantException>().having((e) => e.code, 'code', 'stale'),
+        ),
+      );
+      await requested.future;
+      await service.unpair();
+      pending.complete(pairedReply());
+      await rejected;
+      expect(service.paired, isFalse);
+      expect(credentials.record!['token'], isNull);
+    },
+  );
+
+  test(
+    'unpair wins over an in-progress credential write and app restart',
+    () async {
+      final credentials = DelayedCredentials();
+      final service = AiAssistantService(
+        credentials: credentials,
+        serverUrl: () => 'https://backend.example',
+        clientFactory: () => MockClient(
+          (request) async => request.url.path.endsWith('/pair')
+              ? pairedReply()
+              : http.Response('{}', 200),
+        ),
+      );
+      addTearDown(service.dispose);
+      final pairing = service.pair('test-enrollment-code');
+      final rejected = expectLater(pairing, throwsA(isA<AssistantException>()));
+      await credentials.savingToken.future;
+      final unpairing = service.unpair();
+      expect(service.paired, isFalse);
+      credentials.releaseToken.complete();
+      await Future.wait([rejected, unpairing]);
+      expect(credentials.record!['token'], isNull);
+      final restored = AiAssistantService(
+        credentials: credentials,
+        serverUrl: () => 'https://backend.example',
+      );
+      addTearDown(restored.dispose);
+      await restored.initialize();
+      expect(restored.paired, isFalse);
+    },
+  );
+
+  test('dispose rejects a pending enrollment response', () async {
+    final pending = Completer<http.Response>();
+    final service = AiAssistantService(
+      credentials: MemoryCredentials(),
+      serverUrl: () => 'https://backend.example',
+      clientFactory: () => MockClient((_) => pending.future),
+    );
+    final pairing = service.pair('test-enrollment-code');
+    final rejected = expectLater(pairing, throwsA(isA<AssistantException>()));
+    service.dispose();
+    pending.complete(pairedReply());
+    await rejected;
+    expect(service.paired, isFalse);
+  });
+
   test('expired persisted token never reaches the backend', () async {
     final credentials = MemoryCredentials()
       ..record = {

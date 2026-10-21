@@ -62,12 +62,18 @@ class AssistantController {
   }
 
   Future<bool> pair(String code, {bool allowInsecure = false}) async {
+    if (_disposed) return false;
+    invalidate();
+    final epoch = _epoch;
     try {
       await service.pair(code, allowInsecure: allowInsecure);
+      if (_disposed || epoch != _epoch) return false;
       _error = null;
     } on AssistantException catch (error) {
+      if (_disposed || epoch != _epoch) return false;
       _error = error.message;
     } catch (_) {
+      if (_disposed || epoch != _epoch) return false;
       _error = 'Không lưu được thông tin ghép nối trên thiết bị.';
     }
     _publish();
@@ -77,7 +83,9 @@ class AssistantController {
   Future<void> unpair() async {
     invalidate();
     try {
-      await service.unpair();
+      final unpairing = service.unpair();
+      _publish(); // Local token removal is immediate, even if revocation is slow.
+      await unpairing;
       _error = null;
     } catch (_) {
       _error = 'Đã xóa token trên thiết bị; chưa xác minh thu hồi ở server.';

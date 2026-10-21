@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
@@ -53,15 +54,22 @@ class AiAssistantService {
   bool proactiveEnabled = false;
   bool allowInsecureDev = false;
   int _generation = 0;
+  int _pairGeneration = 0;
+  bool _disposed = false;
   http.Client? _activeClient;
+  http.Client? _pairClient;
+  Future<void>? _credentialWrite;
+  Future<void>? _unpairing;
   bool get paired =>
       _token != null &&
       _expiresAt != null &&
       _expiresAt!.isAfter(DateTime.now());
 
   Future<void> initialize() async {
+    final generation = _pairGeneration;
     try {
       final record = await _credentials.read(_serverUrl());
+      if (_disposed || generation != _pairGeneration) return;
       if (record == null) return;
       _deviceId = record['device_id'] as String? ?? _deviceId;
       _token = record['token'] as String?;
@@ -69,7 +77,7 @@ class AiAssistantService {
       proactiveEnabled = record['proactive'] == true;
       allowInsecureDev = kDebugMode && record['allow_insecure_dev'] == true;
     } catch (_) {
-      _token = null;
+      if (!_disposed && generation == _pairGeneration) _token = null;
     }
   }
 
@@ -104,6 +112,7 @@ class AiAssistantService {
     Map<String, dynamic>? body,
     bool authenticated = true,
     int? generation,
+    int? pairGeneration,
   }) async {
     _checkTransport();
     if (authenticated && !paired) {
@@ -114,6 +123,7 @@ class AiAssistantService {
     }
     final client = _clientFactory();
     if (generation != null) _activeClient = client;
+    if (pairGeneration != null) _pairClient = client;
     try {
       final uri = Uri.parse('${_serverUrl()}/assistant/$path');
       final headers = {
@@ -128,6 +138,7 @@ class AiAssistantService {
       if (generation != null && generation != _generation) {
         throw const AssistantException('Phản hồi đã cũ.', code: 'stale');
       }
+      if (pairGeneration != null) _checkPairGeneration(pairGeneration);
       if (response.body.length > 64000) {
         throw const AssistantException('Phản hồi vượt giới hạn.');
       }
@@ -153,28 +164,42 @@ class AiAssistantService {
     } on AssistantException {
       rethrow;
     } catch (_) {
+      if (pairGeneration != null) _checkPairGeneration(pairGeneration);
       throw const AssistantException(
         'Không kết nối được trợ lý hoặc phản hồi quá chậm. Dẫn đường vẫn hoạt động.',
       );
     } finally {
       client.close();
       if (identical(_activeClient, client)) _activeClient = null;
+      if (identical(_pairClient, client)) _pairClient = null;
     }
   }
 
   Future<void> pair(String code, {bool allowInsecure = false}) async {
+    _cancelPairing();
+    final generation = _pairGeneration;
+    _checkPairGeneration(generation);
+    try {
+      await _unpairing;
+    } catch (_) {
+      // A fresh enrollment may recover after an unconfirmed old revocation.
+    }
+    _checkPairGeneration(generation);
     allowInsecureDev = kDebugMode && allowInsecure;
     final response = await _request(
       'pair',
       authenticated: false,
+      pairGeneration: generation,
       body: {'code': code.trim(), 'device_id': _deviceId},
     );
+    _checkPairGeneration(generation);
     _token = response['access_token'] as String;
     _expiresAt = DateTime.fromMillisecondsSinceEpoch(
       ((response['expires_at'] as num) * 1000).round(),
       isUtc: true,
     );
     await _save();
+    _checkPairGeneration(generation);
   }
 
   Future<void> setProactive(bool enabled) async {
@@ -182,23 +207,61 @@ class AiAssistantService {
     await _save();
   }
 
-  Future<void> _save() => _credentials.write(_serverUrl(), {
+  void _checkPairGeneration(int generation) {
+    if (_disposed || generation != _pairGeneration) {
+      throw const AssistantException(
+        'Yêu cầu ghép nối đã bị hủy.',
+        code: 'stale',
+      );
+    }
+  }
+
+  void _cancelPairing() {
+    ++_pairGeneration;
+    _pairClient?.close();
+    _pairClient = null;
+  }
+
+  Future<void> _save() => _writeCredentials(_serverUrl(), {
     'device_id': _deviceId,
     'token': _token,
     'expires_at': _expiresAt?.toIso8601String(),
     'proactive': proactiveEnabled,
     'allow_insecure_dev': allowInsecureDev,
   });
-  Future<void> unpair() async {
-    cancel();
+
+  Future<void> _writeCredentials(
+    String server,
+    Map<String, dynamic> record,
+  ) async {
+    final previous = _credentialWrite;
+    final completed = Completer<void>();
+    _credentialWrite = completed.future;
     try {
-      if (paired) await _request('unpair', body: {});
+      await previous;
+      await _credentials.write(server, record);
     } finally {
-      _token = null;
-      _expiresAt = null;
-      proactiveEnabled = false;
-      await _save();
+      if (identical(_credentialWrite, completed.future)) {
+        _credentialWrite = null;
+      }
+      completed.complete();
     }
+  }
+
+  Future<void> unpair() {
+    _cancelPairing();
+    cancel();
+    final pending = _unpairing;
+    if (pending != null) return pending;
+    // Capture the authenticated request before clearing the local credential.
+    final revoke = paired ? _request('unpair', body: {}) : null;
+    _token = null;
+    _expiresAt = null;
+    proactiveEnabled = false;
+    return _unpairing = Future.wait<void>([
+      if (revoke != null) revoke.then<void>((_) {}),
+      _save(),
+    ]).then<void>((_) {}).whenComplete(() => _unpairing = null);
   }
 
   Future<void> reset() async {
@@ -247,5 +310,9 @@ class AiAssistantService {
     _activeClient = null;
   }
 
-  void dispose() => cancel();
+  void dispose() {
+    _disposed = true;
+    _cancelPairing();
+    cancel();
+  }
 }
