@@ -1,25 +1,34 @@
-# AI Server
+# Smart Navigation server v2
 
-This service receives JPEG images and returns filtered YOLO detections. It uses
-`yolo11n.pt`, a small pretrained nano model. The weights download automatically
-on the first detection; run one test before the live demonstration.
+FastAPI + YOLO11n + Valhalla **pedestrian** + Nominatim search/reverse.
 
 ```powershell
-cd ai_server
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Open `http://127.0.0.1:8000/health` and expect `{"status":"ok"}`. Interactive
-API documentation is at `http://127.0.0.1:8000/docs`.
+Python 3.11 recommended. Health: `/health`; interactive API: `/docs`.
 
-To use another compatible model, set `YOLO_MODEL` before starting the server.
-The current danger value is only a bounding-box area heuristic—not depth.
+Routing: `/route?from_lat=&from_lng=&to_lat=&to_lng=`. Returns `profile=pedestrian`, geometry `[lat,lng]`, shape-indexed maneuvers, distance/time. Uses `VALHALLA_URL` (default `https://valhalla1.openstreetmap.de`); no driving fallback. Public service needs Internet; self-host for sustained production traffic.
 
+Geocoding: `/geocode?q=&near_lat=&near_lng=`; `/reverse?lat=&lng=`. Nominatim requests share a per-process 1.1-second interval and 5-minute bounded cache. Run one worker; multi-worker deployment needs shared throttling/cache.
 
-## Optional OpenAI Assistant backend
+Detection: `/detect` multipart JPEG; model selected with `YOLO_MODEL`, confidence with `YOLO_CONFIDENCE`. Proximity remains a bounding-box heuristic.
 
-The `/assistant/*` endpoints are optional and do not change the existing `/detect` API.
-Configure `ai_server/.env` from `.env.example` and run `python ai_server/setup_assistant.py` for pairing setup. Keep `OPENAI_API_KEY` server-side only. Run `python -m unittest discover -s ai_server -p 'test_assistant.py'` and `python -m unittest discover -s ai_server -p 'test_pairing_qr.py'` for focused checks. See the fork's `docs/HANDOFF_OPENAI_ASSISTANT.md` for full setup and security guidance.
+Tests: `.venv\Scripts\python.exe -X utf8 -B -m unittest discover -p "test_*.py" -v`.
+
+See [handoff](../docs/HANDOFF_PEDESTRIAN.md) for contract changes and phone validation.
+
+Optional OpenAI Assistant: `OPENAI_API_KEY` is read only from this directory's `.env`.
+Run `python setup_assistant.py` to provision signing/pairing secrets; use
+`--show-pairing-code` to give the device its pairing code, never the OpenAI key.
+Assistant endpoints require HTTPS, device bearer auth, and persistent SQLite
+rate/spend limits. No tool directly changes navigation. Defaults: 1 USD/day total,
+0.5 USD/day/device, 6 turns/min/device, 0.05 USD maximum reservation/turn.
+See [OpenAI handoff](../docs/HANDOFF_OPENAI_ASSISTANT.md) for configuration and local
+HTTP debug exceptions. Navigation endpoints remain independent of assistant configuration.
+
+Run `python setup_assistant.py --qr` to create `.assistant-state/pairing-qr.png`
+locally. Keep it private: it contains the device pairing credential, not the OpenAI
+key or signing secret. It is ignored by Git and is not served by the backend.
+Scan it in the app's pairing screen, then press Pair. Existing secrets are preserved.
