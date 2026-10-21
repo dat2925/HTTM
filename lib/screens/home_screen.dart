@@ -292,13 +292,22 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ],
                               );
                             }
-                            if (widget.controller.cameraError != null) {
-                              return Text(
-                                widget.controller.cameraError!,
-                                style: const TextStyle(color: Colors.orange),
-                              );
-                            }
-                            return const SizedBox.shrink();
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                for (final error in [
+                                  widget.controller.cameraError,
+                                  widget.controller.ttsError,
+                                ])
+                                  if (error != null)
+                                    Text(
+                                      error,
+                                      style: const TextStyle(
+                                        color: Colors.orange,
+                                      ),
+                                    ),
+                              ],
+                            );
                           },
                         ),
                         const Divider(),

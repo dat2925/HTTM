@@ -5,6 +5,31 @@ import 'package:smart_navigation/services/tts_service.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
+    'native speak failure releases priority and silence remains safe',
+    () async {
+      const channel = MethodChannel('flutter_tts');
+      var failSpeak = true, failStop = false;
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if ((call.method == 'speak' && failSpeak) ||
+            (call.method == 'stop' && failStop)) {
+          throw PlatformException(code: 'tts_unavailable');
+        }
+        return 1;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final tts = TtsService();
+      await tts.initialize();
+      expect(await tts.speak('warning', priority: 3), isFalse);
+      failSpeak = false;
+      expect(await tts.speak('assistant', priority: 0), isTrue);
+      failStop = true;
+      await tts.silence();
+      await tts.dispose();
+    },
+  );
+  test(
     'obstacle speech stops AI; lower priority is blocked until silence',
     () async {
       const channel = MethodChannel('flutter_tts');
