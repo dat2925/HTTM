@@ -114,6 +114,8 @@ class SessionController {
   bool _locatingAddress = false;
   bool _navigationPaused = false;
   Future<void>? _listeningStart;
+  int _voiceEpoch = 0;
+  int? _endingVoiceEpoch;
   bool _cameraBorrowed = false;
   Completer<void>? _cameraIdle;
   Future<void>? _cameraWork;
@@ -243,6 +245,7 @@ class SessionController {
     if (_navigationPaused) return _pauseWork ?? Future.value();
     assistant.invalidate();
     _navigationPaused = true;
+    _invalidateVoice();
     stop();
     _routeService.stop();
     return _pauseWork = _pauseHardware();
@@ -250,6 +253,7 @@ class SessionController {
 
   Future<void> _pauseHardware() async {
     await _ttsService.silence();
+    await _finishVoice();
     try {
       await _useCamera(_frameSource.dispose);
     } catch (_) {
@@ -514,58 +518,117 @@ class SessionController {
   };
 
   Future<void> onTalkStart() async {
-    if (_disposed || _isListening) return;
+    if (_disposed || _navigationPaused || _isListening) return;
+    final epoch = ++_voiceEpoch;
     _isListening = true;
     _listeningController.add(true);
+    final starting = _listeningStart = _beginListening(epoch);
     try {
-      _listeningStart = _beginListening();
-      await _listeningStart;
-    } on VoiceException catch (error) {
+      await starting;
+    } catch (error) {
+      if (!_voiceCurrent(epoch)) return;
       _isListening = false;
       _listeningController.add(false);
-      _stateController.add(SessionRunning(statusText: error.message));
-      await _ttsService.speak(error.message);
+      await _cancelRecognition();
+      if (!_voiceCurrent(epoch)) return;
+      final message = error is VoiceException
+          ? error.message
+          : 'Không thể dùng micro. Hãy kiểm tra quyền và dịch vụ nhận dạng giọng nói.';
+      _stateController.add(SessionRunning(statusText: message));
+      try {
+        await _ttsService.speak(message);
+      } catch (_) {
+        // The visible microphone error remains usable without native TTS.
+      }
     } finally {
-      _listeningStart = null;
+      if (identical(_listeningStart, starting)) _listeningStart = null;
     }
   }
 
-  Future<void> _beginListening() async {
+  bool _voiceCurrent(int epoch) =>
+      !_disposed && !_navigationPaused && epoch == _voiceEpoch;
+
+  void _invalidateVoice() {
+    ++_voiceEpoch;
+    _endingVoiceEpoch = null;
+    _isListening = false;
+    if (!_disposed) _listeningController.add(false);
+  }
+
+  Future<void> _cancelRecognition() async {
+    try {
+      await _voiceService.cancelListening();
+    } catch (_) {
+      // A native cancellation failure must not block camera/GPS cleanup.
+    }
+  }
+
+  Future<void> _finishVoice() async {
+    try {
+      await _listeningStart;
+    } catch (_) {
+      // Startup may have failed; still cancel any partially opened recognizer.
+    }
+    await _cancelRecognition();
+  }
+
+  Future<void> _beginListening(int epoch) async {
     await _ttsService.silence();
-    if (_disposed) return;
+    if (!_voiceCurrent(epoch)) return;
     await _voiceService.startListening(
       onResult: (text) {
-        _stateController.add(SessionRunning(statusText: 'Đang nghe: $text'));
+        if (_voiceCurrent(epoch) && _isListening) {
+          _stateController.add(SessionRunning(statusText: 'Đang nghe: $text'));
+        }
       },
     );
   }
 
   Future<void> onTalkEnd() async {
-    if (_disposed) return;
+    final epoch = _voiceEpoch;
+    if (!_voiceCurrent(epoch) || !_isListening || _endingVoiceEpoch == epoch) {
+      return;
+    }
+    _endingVoiceEpoch = epoch;
     try {
       await _listeningStart;
-    } on VoiceException {
-      return;
+      if (!_voiceCurrent(epoch) || !_isListening) return;
+      final text = await _voiceService.stopListening();
+      if (!_voiceCurrent(epoch)) return;
+      _isListening = false;
+      _listeningController.add(false);
+      // A new press may interrupt a slow AI/geocoding response after STT ends.
+      _endingVoiceEpoch = null;
+      if (text == null || text.trim().isEmpty) {
+        _stateController.add(
+          SessionRunning(statusText: _running ? 'AI đang chạy' : 'AI đã dừng'),
+        );
+        return;
+      }
+      await handleUtterance(text);
+    } catch (_) {
+      if (_voiceCurrent(epoch)) {
+        await _cancelRecognition();
+        if (!_voiceCurrent(epoch)) return;
+        _stateController.add(
+          const SessionRunning(
+            statusText: 'Không nhận được giọng nói. Hãy thử lại.',
+          ),
+        );
+      }
+    } finally {
+      if (_voiceCurrent(epoch) && _isListening) {
+        _isListening = false;
+        _listeningController.add(false);
+      }
+      if (_endingVoiceEpoch == epoch) _endingVoiceEpoch = null;
     }
-    if (_disposed) return;
-    final text = await _voiceService.stopListening();
-    if (_disposed) return;
-    _isListening = false;
-    _listeningController.add(false);
-    if (text == null || text.trim().isEmpty) {
-      _stateController.add(
-        SessionRunning(statusText: _running ? 'AI đang chạy' : 'AI đã dừng'),
-      );
-      return;
-    }
-
-    await handleUtterance(text);
   }
 
   /// Shared by the primary microphone and typed conversation. Core templates
   /// never need OpenAI, and only this controller may execute navigation actions.
   Future<void> handleUtterance(String text, {bool includeImage = false}) async {
-    if (_disposed || text.trim().isEmpty) return;
+    if (_disposed || _navigationPaused || text.trim().isEmpty) return;
     final request = ++_destinationRequest;
     final command = VoiceCommand.parse(text);
     lastUtterance = text.trim();
@@ -733,6 +796,7 @@ class SessionController {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _invalidateVoice();
     stop();
     ++_destinationRequest;
     _routeSpeechTimer?.cancel();
@@ -740,6 +804,7 @@ class SessionController {
     await assistant.dispose();
     await _routeSubscription?.cancel();
     await _routeService.dispose();
+    await _finishVoice();
     await _useCamera(_frameSource.dispose);
     _detectionService.dispose();
     _voiceService.dispose();

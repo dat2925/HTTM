@@ -128,6 +128,7 @@ void main() {
         'xác nhận',
       ]) {
         voice.text = text;
+        await session.onTalkStart();
         await session.onTalkEnd();
       }
       expect(ai.calls, 0);
@@ -163,6 +164,7 @@ void main() {
         assistantService: ai,
       );
       voice.text = 'Gợi ý một nơi gần đây để đi dạo';
+      await session.onTalkStart();
       await session.onTalkEnd();
       expect(ai.calls, 1);
       expect(session.lastCommandKind, VoiceCommandKind.assistant);
@@ -231,11 +233,13 @@ void main() {
     );
     await session.initialize();
     voice.text = 'đi đến công viên';
+    await session.onTalkStart();
     await session.onTalkEnd();
     expect(route.destinations, 0);
     expect(session.pendingDestination?.displayName, 'Địa chỉ đầy đủ được tìm');
     expect(tts.spoken.last, contains('xác nhận'));
     voice.text = 'xác nhận';
+    await session.onTalkStart();
     await session.onTalkEnd();
     expect(route.destinations, 1);
     expect(session.pendingDestination, isNull);
