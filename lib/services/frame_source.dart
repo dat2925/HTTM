@@ -24,8 +24,14 @@ class FrameSource {
       enableAudio: false,
       imageFormatGroup: ImageFormatGroup.jpeg,
     );
-    await controller.initialize();
     await _controller?.dispose();
+    _controller = null;
+    try {
+      await controller.initialize();
+    } catch (_) {
+      await controller.dispose();
+      rethrow;
+    }
     _controller = controller;
   }
 

@@ -116,7 +116,10 @@ class SessionController {
   Future<void>? _listeningStart;
   bool _cameraBorrowed = false;
   Completer<void>? _cameraIdle;
+  Future<void> _cameraWork = Future.value();
+  Future<void>? _initialization, _pauseWork;
   int _perceptionEpoch = 0;
+  int _navigationLifecycle = 0;
   String? lastUtterance;
   VoiceCommandKind? lastCommandKind;
 
@@ -129,8 +132,20 @@ class SessionController {
   CameraController? get cameraController => _frameSource.controller;
   bool get isRunning => _running;
 
-  Future<void> initialize() async {
+  Future<T> _useCamera<T>(Future<T> Function() action) {
+    final result = _cameraWork.then((_) => action());
+    _cameraWork = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  Future<void> initialize() => _initialization ??= _initialize();
+
+  Future<void> _initialize() async {
     await _ttsService.initialize();
+    if (_disposed) return;
     unawaited(assistant.initialize());
     _routeSubscription = _routeService.instructions.listen((instruction) {
       _lastRoute = instruction;
@@ -147,13 +162,26 @@ class SessionController {
       const Duration(seconds: 2),
       (_) => unawaited(_speakRoute()),
     );
-    unawaited(_routeService.start());
+    if (!_navigationPaused) unawaited(_routeService.start());
+    await _openCamera();
+  }
+
+  Future<void> _openCamera() async {
     try {
-      await _frameSource.initialize();
+      await _useCamera(() async {
+        if (!_disposed &&
+            !_navigationPaused &&
+            !_cameraBorrowed &&
+            !_frameSource.isReady) {
+          await _frameSource.initialize();
+        }
+      });
+      if (!_disposed && !_navigationPaused && !_cameraBorrowed) {
+        cameraError = null;
+      }
     } catch (_) {
       cameraError = 'Camera chưa sẵn sàng. Bản đồ và GPS vẫn hoạt động.';
     }
-    if (_disposed) await _frameSource.dispose();
   }
 
   Future<void> _speakRoute({bool force = false}) async {
@@ -196,17 +224,33 @@ class SessionController {
     _routeService.cancelDestination();
   }
 
-  Future<void> resumeNavigation() {
+  Future<void> resumeNavigation() async {
+    final lifecycle = ++_navigationLifecycle;
+    await _pauseWork;
+    if (_disposed || lifecycle != _navigationLifecycle) return;
     _navigationPaused = false;
-    return _routeService.start();
+    unawaited(_routeService.start());
+    if (!_cameraBorrowed) await _openCamera();
   }
 
-  void pauseNavigation() {
+  Future<void> pauseNavigation() {
+    ++_navigationLifecycle;
+    if (_disposed) return Future.value();
+    if (_navigationPaused) return _pauseWork ?? Future.value();
     assistant.invalidate();
     _navigationPaused = true;
-    unawaited(_ttsService.silence());
     stop();
     _routeService.stop();
+    return _pauseWork = _pauseHardware();
+  }
+
+  Future<void> _pauseHardware() async {
+    await _ttsService.silence();
+    try {
+      await _useCamera(_frameSource.dispose);
+    } catch (_) {
+      cameraError = 'Chưa giải phóng được camera. Hãy thử lại khi mở ứng dụng.';
+    }
   }
 
   Future<Placemark> findDestination(String query) async {
@@ -280,6 +324,7 @@ class SessionController {
   }
 
   Future<bool> start() async {
+    final epoch = _perceptionEpoch;
     if (_disposed ||
         _cameraBorrowed ||
         _navigationPaused ||
@@ -288,7 +333,11 @@ class SessionController {
       return false;
     }
     final healthy = await _detectionService.isHealthy();
-    if (_disposed || _cameraBorrowed || _navigationPaused || _running) {
+    if (_disposed ||
+        _cameraBorrowed ||
+        _navigationPaused ||
+        _running ||
+        epoch != _perceptionEpoch) {
       return false;
     }
     if (!healthy) {
@@ -314,7 +363,9 @@ class SessionController {
     _captureTimer?.cancel();
     _captureTimer = null;
     _running = false;
-    _stateController.add(const SessionRunning(statusText: 'AI đã dừng'));
+    if (!_disposed) {
+      _stateController.add(const SessionRunning(statusText: 'AI đã dừng'));
+    }
   }
 
   Future<void> _captureAndDetect() async {
@@ -330,7 +381,7 @@ class SessionController {
     final startedAt = DateTime.now();
     XFile? image;
     try {
-      image = await _frameSource.captureFrame();
+      image = await _useCamera<XFile>(_frameSource.captureFrame);
       try {
         _latestJpeg = await image.readAsBytes();
         _jpegAt = DateTime.now();
@@ -356,9 +407,10 @@ class SessionController {
           latencyMs: latencyMs,
         ),
       );
-      await _processResult(result);
+      await _processResult(result, epoch);
     } on CameraException {
       if (_running && epoch == _perceptionEpoch) {
+        cameraError = 'Lỗi chụp ảnh từ camera.';
         _stateController.add(
           const SessionRunning(statusText: 'Lỗi chụp ảnh từ camera.'),
         );
@@ -367,6 +419,11 @@ class SessionController {
       if (_running && epoch == _perceptionEpoch) {
         cameraError = error.message;
         _stateController.add(SessionRunning(statusText: error.message));
+      }
+    } catch (_) {
+      if (!_disposed && _running && epoch == _perceptionEpoch) {
+        cameraError = 'Nhận diện tạm thời không khả dụng. GPS vẫn hoạt động.';
+        _stateController.add(SessionRunning(statusText: cameraError!));
       }
     } finally {
       if (!cameraIdle.isCompleted) cameraIdle.complete();
@@ -381,7 +438,7 @@ class SessionController {
     }
   }
 
-  Future<void> _processResult(DetectionResult result) async {
+  Future<void> _processResult(DetectionResult result, int epoch) async {
     final warning = _reasoningService.selectWarning(result.objects);
     final routeText = _lastRoute?.text;
 
@@ -435,12 +492,14 @@ class SessionController {
       } else if (warning.danger == DangerLevel.medium) {
         await HapticFeedback.mediumImpact();
       }
-      if (!_isListening) {
-        await _ttsService.speak(warning.text, priority: 3);
+      if (_disposed || !_running || epoch != _perceptionEpoch || _isListening) {
+        return;
       }
-      _lastSpokenWarning = warning.text;
-      _lastSpokenAt = now;
-      _lastSpokenDanger = warning.danger;
+      if (await _ttsService.speak(warning.text, priority: 3)) {
+        _lastSpokenWarning = warning.text;
+        _lastSpokenAt = now;
+        _lastSpokenDanger = warning.danger;
+      }
     }
   }
 
@@ -585,7 +644,7 @@ class SessionController {
   /// Temporarily lend the one camera to QR scanning, without stopping GPS or
   /// route guidance. Wait for capture, not for the network detection response.
   Future<bool> suspendCameraForQr() async {
-    if (_disposed || _cameraBorrowed || _isListening) {
+    if (_disposed || _navigationPaused || _cameraBorrowed || _isListening) {
       throw const AssistantException('Hãy kết thúc ghi âm trước khi quét QR.');
     }
     final wasRunning = _running;
@@ -594,7 +653,7 @@ class SessionController {
     stop();
     try {
       await _cameraIdle?.future.timeout(const Duration(seconds: 10));
-      await _frameSource.dispose();
+      await _useCamera(_frameSource.dispose);
       _latestJpeg = null;
       _jpegAt = null;
       if (_disposed) return wasRunning;
@@ -611,18 +670,10 @@ class SessionController {
 
   Future<void> resumeCameraAfterQr({required bool restartPerception}) async {
     if (!_cameraBorrowed || _disposed) return;
-    try {
-      await _frameSource.initialize();
-      cameraError = null;
-    } catch (_) {
-      cameraError = 'Chưa mở lại được camera. Bản đồ và GPS vẫn hoạt động.';
-    } finally {
-      _cameraBorrowed = false;
-    }
-    if (_disposed) {
-      await _frameSource.dispose();
-      return;
-    }
+    _cameraBorrowed = false;
+    if (_navigationPaused) return;
+    await _openCamera();
+    if (_disposed || _navigationPaused) return;
     _stateController.add(SessionRunning(statusText: routeSnapshot.message));
     if (restartPerception) await start();
   }
@@ -643,7 +694,7 @@ class SessionController {
     final cameraIdle = _cameraIdle = Completer<void>();
     XFile? image;
     try {
-      image = await _frameSource.captureFrame();
+      image = await _useCamera<XFile>(_frameSource.captureFrame);
       final bytes = await image.readAsBytes();
       final capturedAt = DateTime.now();
       _latestJpeg = bytes;
@@ -678,13 +729,14 @@ class SessionController {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    stop();
     ++_destinationRequest;
     _routeSpeechTimer?.cancel();
     _captureTimer?.cancel();
     await assistant.dispose();
     await _routeSubscription?.cancel();
     await _routeService.dispose();
-    await _frameSource.dispose();
+    await _useCamera(_frameSource.dispose);
     _detectionService.dispose();
     _voiceService.dispose();
     _geocodingService.dispose();

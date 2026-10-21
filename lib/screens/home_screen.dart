@@ -95,11 +95,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
-      widget.controller.pauseNavigation();
+      unawaited(widget.controller.pauseNavigation());
     } else if (state == AppLifecycleState.resumed && !_initializing) {
-      unawaited(widget.controller.resumeNavigation());
-      unawaited(widget.controller.start());
+      unawaited(_resume());
     }
+  }
+
+  Future<void> _resume() async {
+    await widget.controller.resumeNavigation();
+    if (mounted) await widget.controller.start();
   }
 
   void _openAssistant() => unawaited(
