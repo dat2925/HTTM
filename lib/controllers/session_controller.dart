@@ -116,7 +116,7 @@ class SessionController {
   Future<void>? _listeningStart;
   bool _cameraBorrowed = false;
   Completer<void>? _cameraIdle;
-  Future<void> _cameraWork = Future.value();
+  Future<void>? _cameraWork;
   Future<void>? _initialization, _pauseWork;
   int _perceptionEpoch = 0;
   int _navigationLifecycle = 0;
@@ -132,13 +132,17 @@ class SessionController {
   CameraController? get cameraController => _frameSource.controller;
   bool get isRunning => _running;
 
-  Future<T> _useCamera<T>(Future<T> Function() action) {
-    final result = _cameraWork.then((_) => action());
-    _cameraWork = result.then<void>(
-      (_) {},
-      onError: (Object _, StackTrace _) {},
-    );
-    return result;
+  Future<T> _useCamera<T>(Future<T> Function() action) async {
+    final previous = _cameraWork;
+    final completed = Completer<void>();
+    _cameraWork = completed.future;
+    try {
+      await previous;
+      return await action();
+    } finally {
+      if (identical(_cameraWork, completed.future)) _cameraWork = null;
+      completed.complete();
+    }
   }
 
   Future<void> initialize() => _initialization ??= _initialize();
