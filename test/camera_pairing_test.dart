@@ -1,95 +1,73 @@
 import 'dart:async';
-import 'dart:typed_data';
+
 import 'package:camera/camera.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_navigation/controllers/session_controller.dart';
-import 'package:smart_navigation/models/detection_result.dart';
-import 'package:smart_navigation/services/frame_source.dart';
-import 'package:smart_navigation/services/ai_detection_service.dart';
-import 'package:smart_navigation/services/route_service.dart';
-import 'assistant_test.dart' show FakeAssistant;
-import 'session_navigation_test.dart' show FakeRoute, RecordingTts;
 
-class BorrowableCamera extends FrameSource {
-  final capture = Completer<XFile>();
-  int opened = 0, closed = 0;
-  bool ready = false;
-  @override
-  bool get isReady => ready;
-  @override
-  Future<void> initialize() async {
-    opened++;
-    ready = true;
-  }
-
-  @override
-  Future<void> dispose() async {
-    closed++;
-    ready = false;
-  }
-
-  @override
-  Future<XFile> captureFrame() => capture.future;
-}
-
-class PendingDetection extends AiDetectionService {
-  final reply = Completer<DetectionResult>();
-  @override
-  Future<bool> isHealthy() async => true;
-  @override
-  Future<DetectionResult> detect(XFile image) => reply.future;
-}
+import 'support/device_fakes.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
-    'QR waits for capture, keeps GPS/TTS, and discards old YOLO after restore',
+    'QR waits for capture, preserves external speech and discards stale YOLO',
     () async {
-      final camera = BorrowableCamera(), detection = PendingDetection();
-      final route = FakeRoute(), tts = RecordingTts();
+      final camera = FakeCamera()..captureGate = Completer<XFile>();
+      final detector = FakeDetector()..deferred = true;
+      final tts = RecordingTts();
       final session = SessionController(
         frameSource: camera,
-        detectionService: detection,
-        routeService: route,
+        detectionService: detector,
         ttsService: tts,
-        assistantService: FakeAssistant(),
+        voiceService: FakeVoice(),
       );
-      final emitted = <Object>[];
-      final subscription = session.frames.listen(emitted.add);
-      await session.initialize();
-      expect(await session.start(), isTrue);
+      addTearDown(session.dispose);
+      final frames = <Object>[];
+      final sub = session.frames.listen(frames.add);
+      await session.start();
+      await flushDeviceEvents();
       final borrow = session.suspendCameraForQr();
-      await Future<void>.delayed(Duration.zero);
-      expect(
-        camera.closed,
-        0,
-      ); // Cannot dispose while takePicture is still running.
-      camera.capture.complete(XFile.fromData(Uint8List.fromList([1, 2, 3])));
-      expect(
-        await borrow,
-        isTrue,
-      ); // Detection reply is still pending at this point.
+      await flushDeviceEvents();
+      expect(camera.closed, 0);
+      camera.captureGate!.complete(XFile.fromData(Uint8List.fromList([1])));
+      expect(await borrow, isTrue);
       expect(camera.closed, 1);
-      expect(route.stopped, 0);
-      expect(session.isRunning, isFalse);
-      route.events.add(
-        const RouteInstruction(text: 'Sau 20 mét rẽ trái', key: 'left'),
-      );
-      await Future<void>.delayed(Duration.zero);
-      expect(tts.spoken, contains('Sau 20 mét rẽ trái'));
-      await session.resumeCameraAfterQr(restartPerception: true);
-      expect(camera.opened, 2);
-      expect(session.isRunning, isTrue);
-      detection.reply.complete(
-        const DetectionResult(imageWidth: 1, imageHeight: 1, objects: []),
-      );
-      await Future<void>.delayed(Duration.zero);
+      // This capture was canceled before inference started.
+      expect(detector.requests, 0);
       expect(
-        emitted,
-        isEmpty,
-      ); // The pre-scan frame belongs to the old perception epoch.
-      await subscription.cancel();
-      await session.dispose();
+        await session.speakGuidance('Hướng dẫn bên ngoài vẫn hoạt động'),
+        isTrue,
+      );
+      camera.captureGate = null;
+      await session.resumeCameraAfterQr(restartPerception: true);
+      await flushDeviceEvents();
+      expect(camera.opened, 2);
+      expect(detector.requests, 1);
+      final secondBorrow = await session.suspendCameraForQr();
+      await session.resumeCameraAfterQr(restartPerception: secondBorrow);
+      detector.pending.first.complete(dangerDetection);
+      await flushDeviceEvents();
+      expect(frames, isEmpty);
+      expect(tts.spoken.where((s) => s.$2 == 3), isEmpty);
+      await sub.cancel();
+    },
+  );
+
+  test(
+    'QR lease cannot take the camera during active microphone input',
+    () async {
+      final session = SessionController(
+        frameSource: FakeCamera(),
+        detectionService: FakeDetector(),
+        voiceService: FakeVoice(),
+        ttsService: RecordingTts(),
+      );
+      addTearDown(session.dispose);
+      await session.onTalkStart();
+      await expectLater(
+        session.suspendCameraForQr(),
+        throwsA(isA<DeviceSessionException>()),
+      );
     },
   );
 }

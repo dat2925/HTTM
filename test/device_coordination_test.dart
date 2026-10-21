@@ -1,110 +1,205 @@
 import 'dart:async';
 
-import 'package:camera/camera.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_navigation/controllers/session_controller.dart';
 import 'package:smart_navigation/models/detection_result.dart';
-import 'package:smart_navigation/services/ai_detection_service.dart';
-import 'package:smart_navigation/services/frame_source.dart';
-import 'package:smart_navigation/services/tts_service.dart';
+import 'package:smart_navigation/models/session_state.dart';
+import 'package:smart_navigation/services/voice_command_router.dart';
 
-import 'assistant_test.dart' show FakeAssistant;
-import 'session_navigation_test.dart' show FakeRoute, RecordingTts;
-
-class ReadyCamera extends FrameSource {
-  @override
-  bool get isReady => true;
-  @override
-  Future<void> initialize() async {}
-  @override
-  Future<XFile> captureFrame() async =>
-      XFile.fromData(Uint8List.fromList([1, 2, 3]));
-  @override
-  Future<void> dispose() async {}
-}
-
-class SlowDetector extends AiDetectionService {
-  final replies = <Completer<DetectionResult>>[];
-  @override
-  Future<bool> isHealthy() async => true;
-  @override
-  Future<DetectionResult> detect(XFile image) {
-    final reply = Completer<DetectionResult>();
-    replies.add(reply);
-    return reply.future;
-  }
-}
+import 'support/device_fakes.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  late FakeCamera camera;
+  late FakeDetector detector;
+  late FakeVoice voice;
+  late RecordingTts tts;
+  late SessionController session;
+  late List<VoiceCommand> commands;
+  late List<DangerLevel> haptics;
+
+  setUp(() {
+    camera = FakeCamera();
+    detector = FakeDetector();
+    voice = FakeVoice();
+    tts = RecordingTts();
+    commands = [];
+    haptics = [];
+    session = SessionController(
+      frameSource: camera,
+      detectionService: detector,
+      voiceService: voice,
+      ttsService: tts,
+      captureInterval: const Duration(milliseconds: 30),
+      onVoiceCommand: (command, _) => commands.add(command),
+      onHaptic: (danger) async {
+        haptics.add(danger);
+      },
+    );
+  });
+  tearDown(() => session.dispose());
+
+  test('only one request while inference is pending', () async {
+    detector.deferred = true;
+    await session.start();
+    await Future<void>.delayed(const Duration(milliseconds: 110));
+    expect(detector.requests, 1);
+    expect(camera.captures, 1);
+    detector.pending.single.complete(emptyDetection);
+    await flushDeviceEvents();
+    session.stop();
+  });
 
   test(
-    'one YOLO request at a time; pause discards old detection and resume restarts',
+    'pause discards an old detection; resume publishes a fresh frame',
     () async {
-      final detector = SlowDetector();
-      final session = SessionController(
-        frameSource: ReadyCamera(),
-        detectionService: detector,
-        routeService: FakeRoute(),
-        ttsService: RecordingTts(),
-        assistantService: FakeAssistant(),
-      );
+      detector.deferred = true;
       final frames = <Object>[];
-      final subscription = session.frames.listen(frames.add);
-      await session.initialize();
-      expect(await session.start(), isTrue);
-      await Future<void>.delayed(Duration.zero);
-      await Future<void>.delayed(const Duration(milliseconds: 1900));
-      expect(detector.replies, hasLength(1));
-      session.pauseNavigation();
-      detector.replies.first.complete(
-        const DetectionResult(imageWidth: 1, imageHeight: 1, objects: []),
-      );
-      await Future<void>.delayed(Duration.zero);
+      final sub = session.frames.listen(frames.add);
+      await session.start();
+      await flushDeviceEvents();
+      await session.pause();
+      detector.pending.first.complete(dangerDetection);
+      await flushDeviceEvents();
       expect(frames, isEmpty);
-      expect(session.isRunning, isFalse);
-      await session.resumeNavigation();
-      expect(await session.start(), isTrue);
-      await Future<void>.delayed(Duration.zero);
-      expect(detector.replies, hasLength(2));
-      detector.replies.last.complete(
-        const DetectionResult(imageWidth: 1, imageHeight: 1, objects: []),
-      );
-      await Future<void>.delayed(Duration.zero);
+      expect(tts.spoken, isEmpty);
+      expect(haptics, isEmpty);
+      expect(camera.ready, isFalse);
+      await session.resume();
+      await flushDeviceEvents();
+      expect(detector.requests, 2);
+      detector.pending.last.complete(emptyDetection);
+      await flushDeviceEvents();
       expect(frames, hasLength(1));
-      await subscription.cancel();
-      await session.dispose();
+      expect(session.isRunning, isTrue);
+      await sub.cancel();
     },
   );
 
   test(
-    'obstacle TTS interrupts AI and silence clears priority for STT',
+    'camera initialization failure leaves speech integration usable',
     () async {
-      const channel = MethodChannel('flutter_tts');
-      final spoken = <String>[];
-      var stops = 0;
-      final messenger =
-          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-      messenger.setMockMethodCallHandler(channel, (call) async {
-        if (call.method == 'stop') stops++;
-        if (call.method == 'speak') {
-          spoken.add(call.arguments as String);
-        }
-        return 1;
-      });
-      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
-      final tts = TtsService();
-      await tts.initialize();
-      expect(await tts.speak('Trợ lý đang giải thích', priority: 0), isTrue);
-      expect(await tts.speak('Có vật cản phía trước', priority: 3), isTrue);
-      expect(await tts.speak('Trợ lý tiếp tục', priority: 0), isFalse);
-      expect(spoken, ['Trợ lý đang giải thích', 'Có vật cản phía trước']);
-      expect(stops, 2);
-      await tts.silence();
-      expect(stops, 3);
-      expect(await tts.speak('Đã nghe xong', priority: 0), isTrue);
-      await tts.dispose();
+      camera.failOpen = true;
+      expect(await session.start(), isFalse);
+      expect(session.cameraError, isNotNull);
+      expect(await session.speakGuidance('Rẽ trái'), isTrue);
+      expect(tts.spoken.single, ('Rẽ trái', 1));
     },
   );
+
+  test('capture failure is reported and a later capture can recover', () async {
+    camera.failCapture = true;
+    await session.start();
+    await flushDeviceEvents();
+    expect(session.cameraError, isNotNull);
+    expect(detector.requests, 0);
+    camera.failCapture = false;
+    await Future<void>.delayed(const Duration(milliseconds: 45));
+    expect(detector.requests, greaterThan(0));
+    expect(session.cameraError, isNull);
+  });
+
+  test('inference failure releases the request guard for retry', () async {
+    detector.fail = true;
+    await session.start();
+    await flushDeviceEvents();
+    expect(session.cameraError, contains('Server'));
+    detector.fail = false;
+    await Future<void>.delayed(const Duration(milliseconds: 45));
+    expect(detector.requests, greaterThan(1));
+    expect(session.cameraError, isNull);
+  });
+
+  test('stop during health check cannot start a capture timer', () async {
+    detector.healthGate = Completer<bool>();
+    final start = session.start();
+    await flushDeviceEvents();
+    session.stop();
+    detector.healthGate!.complete(true);
+    expect(await start, isFalse);
+    expect(camera.captures, 0);
+  });
+
+  test(
+    'Vietnamese obstacle warning and vibration preempt assistant speech',
+    () async {
+      detector.result = dangerDetection;
+      expect(await session.speakAssistant('Đang giải thích'), isTrue);
+      await session.start();
+      await flushDeviceEvents();
+      expect(tts.spoken.last.$1, contains('người'));
+      expect(tts.spoken.last.$2, 3);
+      expect(haptics, [DangerLevel.high]);
+      expect(session.state, isA<SessionAlerting>());
+      expect(await session.speakAssistant('Phản hồi mới'), isFalse);
+      expect(await session.speakGuidance('Đi thẳng'), isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 45));
+      expect(tts.spoken.where((s) => s.$2 == 3), hasLength(1));
+    },
+  );
+
+  test(
+    'STT stops TTS first and routes a final transcript through the callback',
+    () async {
+      voice.text = 'Đi đến công viên';
+      await session.onTalkStart();
+      expect(tts.silences, 1);
+      expect(voice.starts, 1);
+      expect(await session.speakAssistant('Không đọc khi đang nghe'), isFalse);
+      await session.onTalkEnd();
+      expect(session.isListening, isFalse);
+      expect(commands.single.kind, VoiceCommandKind.destination);
+      expect(commands.single.destination, 'công viên');
+    },
+  );
+
+  test(
+    'quick release waits for recognizer startup; duplicate release is ignored',
+    () async {
+      voice.startGate = Completer<void>();
+      voice.text = 'Nhắc lại';
+      final start = session.onTalkStart();
+      final end = session.onTalkEnd();
+      await session.onTalkEnd();
+      expect(voice.stops, 0);
+      voice.startGate!.complete();
+      await Future.wait([start, end]);
+      expect(voice.stops, 1);
+      expect(commands.single.kind, VoiceCommandKind.repeat);
+    },
+  );
+
+  test('microphone failure resets listening state', () async {
+    voice.fail = true;
+    await session.onTalkStart();
+    expect(session.isListening, isFalse);
+    expect(session.state.statusText, contains('micro'));
+    expect(await session.speakAssistant('Có thể đọc lại'), isTrue);
+  });
+
+  test('pause cancels recognition and rejects a late transcript', () async {
+    voice.stopGate = Completer<String?>();
+    await session.onTalkStart();
+    final end = session.onTalkEnd();
+    await flushDeviceEvents();
+    await session.pause();
+    voice.stopGate!.complete('Đi đến công viên');
+    await end;
+    expect(commands, isEmpty);
+    expect(voice.cancels, 1);
+    expect(session.isListening, isFalse);
+    expect(await session.speakAssistant('Không đọc khi pause'), isFalse);
+  });
+
+  test('perception vibrates but does not speak over active STT', () async {
+    detector.result = dangerDetection;
+    await session.onTalkStart();
+    await session.start();
+    await flushDeviceEvents();
+    expect(haptics, [DangerLevel.high]);
+    expect(tts.spoken, isEmpty);
+    await session.onTalkEnd();
+    await Future<void>.delayed(const Duration(milliseconds: 45));
+    expect(tts.spoken.last.$2, 3);
+  });
 }

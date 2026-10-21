@@ -1,34 +1,20 @@
-# Smart Navigation server v2
+# Backend nhận diện — Người 2
 
-FastAPI + YOLO11n + Valhalla **pedestrian** + Nominatim search/reverse.
+`detector.py` chạy YOLO và lọc vật cản; `main.py` là entry point demo chỉ có
+`GET /health` và `POST /detect` (multipart field `image`).
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
+python -m pip install -r ai_server/requirements.txt
+python -m uvicorn main:app --app-dir ai_server --host 0.0.0.0 --port 8000
+python -m unittest discover -s ai_server -p "test_*.py"
 ```
 
-Python 3.11 recommended. Health: `/health`; interactive API: `/docs`.
+Chạy các lệnh từ thư mục gốc dự án. Khi tích hợp, Người 3 quản lý entry point
+backend chung và đăng ký `/detect` cùng các module của Người 1/3.
+Bản này không có routing/geocoding hoặc các endpoint trợ lý.
 
-Routing: `/route?from_lat=&from_lng=&to_lat=&to_lng=`. Returns `profile=pedestrian`, geometry `[lat,lng]`, shape-indexed maneuvers, distance/time. Uses `VALHALLA_URL` (default `https://valhalla1.openstreetmap.de`); no driving fallback. Public service needs Internet; self-host for sustained production traffic.
+Ảnh thiếu trả 422; ảnh rỗng hoặc hỏng trả 400; lỗi inference trả 500 với thông báo ổn định.
+Test endpoint mock detector, không tải trọng số hoặc gọi dịch vụ ngoài.
 
-Geocoding: `/geocode?q=&near_lat=&near_lng=`; `/reverse?lat=&lng=`. Nominatim requests share a per-process 1.1-second interval and 5-minute bounded cache. Run one worker; multi-worker deployment needs shared throttling/cache.
-
-Detection: `/detect` multipart JPEG; model selected with `YOLO_MODEL`, confidence with `YOLO_CONFIDENCE`. Proximity remains a bounding-box heuristic.
-
-Tests: `.venv\Scripts\python.exe -X utf8 -B -m unittest discover -p "test_*.py" -v`.
-
-See [handoff](../docs/HANDOFF_PEDESTRIAN.md) for contract changes and phone validation.
-
-Optional OpenAI Assistant: `OPENAI_API_KEY` is read only from this directory's `.env`.
-Run `python setup_assistant.py` to provision signing/pairing secrets; use
-`--show-pairing-code` to give the device its pairing code, never the OpenAI key.
-Assistant endpoints require HTTPS, device bearer auth, and persistent SQLite
-rate/spend limits. No tool directly changes navigation. Defaults: 1 USD/day total,
-0.5 USD/day/device, 6 turns/min/device, 0.05 USD maximum reservation/turn.
-See [OpenAI handoff](../docs/HANDOFF_OPENAI_ASSISTANT.md) for configuration and local
-HTTP debug exceptions. Navigation endpoints remain independent of assistant configuration.
-
-Run `python setup_assistant.py --qr` to create `.assistant-state/pairing-qr.png`
-locally. Keep it private: it contains the device pairing credential, not the OpenAI
-key or signing secret. It is ignored by Git and is not served by the backend.
-Scan it in the app's pairing screen, then press Pair. Existing secrets are preserved.
+Model mặc định `yolo11n.pt`; đổi qua `YOLO_MODEL` và `YOLO_CONFIDENCE`.
+Mức nguy hiểm dựa trên diện tích bounding box, không phải khoảng cách vật lý.
