@@ -35,8 +35,12 @@ migrate_working_dir/
 .gradle-cache/
 .tmp/
 ai_server/.venv/
+.venv/
+.venv-ai/
+.venv-server/
 ai_server/__pycache__/
 ai_server/*.pt
+android/.kotlin/
 
 # Symbolication related
 app.*.symbols
@@ -48,3 +52,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+
+#git
+**/.env
+ai_server/.assistant-state/
+**/.env.*.local
