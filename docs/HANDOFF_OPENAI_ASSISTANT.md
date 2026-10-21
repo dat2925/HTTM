@@ -66,15 +66,20 @@ Biến backend `.env`: `OPENAI_ASSISTANT_MODEL`, `ASSISTANT_DAILY_USD`, `ASSISTA
 
 ## 6. Cấu hình và chạy
 
-Backend `.env` trong workspace đã có key; công cụ setup đã bổ sung secret ghép nối/ký nếu thiếu, không in hoặc đổi OpenAI key.
+Clone mới chưa có `ai_server/.env`. Tạo file từ mẫu, tự điền `OPENAI_API_KEY` tại backend nếu muốn bật trợ lý. Không sao chép `.env` từ thư mục fork. Công cụ setup chỉ bổ sung secret ghép nối/ký nếu thiếu, không in hoặc đổi OpenAI key.
 
 Từ workspace:
 
 ```powershell
+py -3.11 -m venv ai_server/.venv
 ai_server\.venv\Scripts\python.exe -m pip install -r ai_server/requirements.txt
+if (-not (Test-Path ai_server/.env)) { Copy-Item ai_server/.env.example ai_server/.env }
+# Điền OPENAI_API_KEY trong ai_server/.env trước khi sử dụng trợ lý thật.
 ai_server\.venv\Scripts\python.exe ai_server/setup_assistant.py --show-pairing-code
 ai_server\.venv\Scripts\python.exe ai_server/setup_assistant.py --qr
 ```
+
+Kết quả khôi phục và kiểm thử hiện tại: [RESTORATION_REPORT.md](RESTORATION_REPORT.md). Các kết quả thực địa ghi trong tài liệu bàn giao cũ không thay thế việc kiểm tra trên thiết bị hiện tại.
 
 Lệnh thứ hai chỉ in trạng thái key và **mã ghép nối**, không in API key. Cung cấp mã qua kênh riêng cho thiết bị được phép. Không đặt mã vào Flutter `.env` hoặc source.
 
