@@ -3,8 +3,10 @@ import 'dart:typed_data';
 import '../models/assistant_state.dart';
 import '../models/detection_result.dart';
 import '../models/route_progress.dart';
+import '../models/situation_context.dart';
 import '../services/assistant_service.dart';
 import '../services/assistant_policy.dart';
+import '../services/situation_engine.dart';
 
 class AssistantImage {
   const AssistantImage(this.bytes, this.capturedAt);
@@ -23,7 +25,9 @@ class AssistantController {
     required this.speak,
     required this.canSpeak,
     required this.canProactivelyRequest,
-  });
+    SituationEngine? situationEngine,
+  }) : _situationEngine = situationEngine ?? SituationEngine();
+  final SituationEngine _situationEngine;
   final AiAssistantService service;
   final RouteProgress Function() snapshot;
   final List<DetectedObject> Function() detections;
@@ -41,13 +45,19 @@ class AssistantController {
   RouteProgress? _requestContext;
   DateTime? _requestedAt;
   String? _error, _pendingSpeech;
+  String? _precautionSpeech, _requestSceneKey;
+  DateTime? _precautionExpires;
   DateTime? _speechExpires;
   DateTime? _lastInteraction;
   Timer? _timer;
   bool _busy = false, _disposed = false;
+  bool _activeProactive = false, _deliveringSpeech = false;
+  bool _requiresLiveContext = true;
   int _epoch = 0;
   NavigationStatus? _observedStatus;
   DateTime? _statusSince;
+  int? _requestedRevision;
+  DateTime? _evidenceExpires;
   Stream<AssistantState> get states => _states.stream;
   AssistantState get state => _state;
 
@@ -95,6 +105,7 @@ class AssistantController {
   }
 
   Future<void> setProactive(bool enabled) async {
+    if (!enabled && _activeProactive) invalidate();
     try {
       await service.setProactive(enabled);
       _error = null;
@@ -118,6 +129,7 @@ class AssistantController {
   }
 
   void observe(RouteProgress progress) {
+    _situation();
     if (_observedStatus != progress.status) {
       _observedStatus = progress.status;
       _statusSince = DateTime.now();
@@ -131,60 +143,30 @@ class AssistantController {
   bool _contextValid() =>
       _requestContext != null &&
       _requestedAt != null &&
-      AssistantProactivityPolicy.contextStillCurrent(
-        _requestContext!,
-        snapshot(),
-        _requestedAt!,
-        DateTime.now(),
-      );
+      snapshot().status != NavigationStatus.paused &&
+      DateTime.now().difference(_requestedAt!) <= const Duration(seconds: 30) &&
+      (!_requiresLiveContext ||
+          ((_requestedRevision == null ||
+                  _requestedRevision == _situation().revision) &&
+              AssistantProactivityPolicy.contextStillCurrent(
+                _requestContext!,
+                snapshot(),
+                _requestedAt!,
+                DateTime.now(),
+              ))) &&
+      (_evidenceExpires == null || DateTime.now().isBefore(_evidenceExpires!));
 
-  Map<String, dynamic> _context(
-    RouteProgress p,
-    DateTime now,
-    DateTime? imageAt,
-  ) {
-    final yoloAt = yoloUpdatedAt();
-    final freshYolo =
-        yoloAt != null && now.difference(yoloAt) < const Duration(seconds: 5);
-    return {
-      'captured_at': now.toUtc().toIso8601String(),
-      'position': p.position == null
-          ? null
-          : {'lat': p.position!.lat, 'lng': p.position!.lng},
-      'gps_updated_at': p.updatedAt?.toUtc().toIso8601String(),
-      'accuracy_meters': p.accuracyMeters,
-      'heading_degrees': p.headingDegrees,
-      'target_bearing': p.targetBearing,
-      'status': p.status.name,
-      'route_message': p.message,
-      'street_name': p.streetName,
-      'destination': p.destination == null
-          ? null
-          : {'lat': p.destination!.lat, 'lng': p.destination!.lng},
-      'destination_name': p.destinationName,
-      'remaining_meters': p.remainingMeters,
-      'walked_meters': p.walkedMeters,
-      'next_instructions': p.waypoints
-          .skip(p.currentIndex)
-          .take(8)
-          .map((w) => w.instruction)
-          .toList(),
-      'obstacles': freshYolo
-          ? detections()
-                .take(20)
-                .map(
-                  (o) => {
-                    'class_name': o.className,
-                    'position': o.position,
-                    'danger': o.danger.name,
-                    'confidence': o.confidence,
-                  },
-                )
-                .toList()
-          : [],
-      'yolo_updated_at': freshYolo ? yoloAt.toUtc().toIso8601String() : null,
-      'image_captured_at': imageAt?.toUtc().toIso8601String(),
-    };
+  // Same engine is shared with SessionController; legacy callbacks remain useful
+  // for callers/tests and never mark a network response as a fresh capture.
+  SituationContext _situation({DateTime? imageAt}) {
+    final now = DateTime.now(), at = yoloUpdatedAt();
+    if (at != null &&
+        SituationEngine.fresh(at, now, SituationEngine.detectionTtl)) {
+      _situationEngine.observeDetections(detections(), at, now);
+    } else {
+      _situationEngine.clearPerception();
+    }
+    return _situationEngine.snapshot(snapshot(), now, imageAt: imageAt);
   }
 
   Future<void> ask(
@@ -194,8 +176,12 @@ class AssistantController {
     String? event,
   }) async {
     if (_disposed || message.trim().isEmpty) return;
-    if (proactive && (_busy || !canProactivelyRequest())) return;
+    if (proactive &&
+        (_busy || !service.proactiveEnabled || !canProactivelyRequest())) {
+      return;
+    }
     invalidate();
+    _activeProactive = proactive;
     final epoch = _epoch;
     if (!service.paired) {
       _error =
@@ -213,31 +199,77 @@ class AssistantController {
     }
     _publish();
     try {
-      final image = includeImage ? await captureImage() : null;
+      AssistantImage? image;
+      String? imageError;
+      if (includeImage) {
+        try {
+          image = await captureImage();
+        } on AssistantException catch (error) {
+          imageError = error.message;
+        } catch (_) {
+          imageError = 'Camera chưa sẵn sàng.';
+        }
+        if (image != null &&
+            !SituationEngine.fresh(
+              image.capturedAt,
+              DateTime.now(),
+              SituationEngine.imageTtl,
+            )) {
+          image = null;
+          imageError = 'Ảnh camera đã cũ.';
+        }
+      }
       if (_disposed || epoch != _epoch) return;
       final captured = snapshot(), requestedAt = DateTime.now();
       _requestContext = captured;
       _requestedAt = requestedAt;
+      final situation = _situation(imageAt: image?.capturedAt);
+      _requestedRevision = situation.revision;
+      _requestSceneKey = situation.sceneKey;
+      _evidenceExpires = image?.capturedAt.add(SituationEngine.imageTtl);
       final reply = await service.chat(
-        message.trim(),
-        _context(captured, requestedAt, image?.capturedAt),
+        imageError == null
+            ? message.trim()
+            : '${message.trim()}\nCamera không khả dụng; hãy dùng nguồn khác và nêu giới hạn.',
+        situation.toNavigationJson(),
         image: image?.bytes,
         proactive: proactive,
         event: event,
       );
       if (_disposed || epoch != _epoch) return;
+      _evidenceExpires = reply.expiresAt;
+      if (reply.guidance != null &&
+          !reply.guidance!.evidenceSources.any((s) => s != 'user') &&
+          reply.proposals.isEmpty) {
+        _requestedRevision = null;
+        _requiresLiveContext = false;
+      }
       if (!_contextValid()) {
         _error = proactive
             ? null
             : 'Vị trí hoặc tuyến đã thay đổi. Hãy hỏi lại để nhận thông tin mới.';
         return;
       }
-      _messages.add(AssistantMessage(reply.text, proactive: proactive));
+      _messages.add(
+        AssistantMessage(
+          reply.text,
+          proactive: proactive,
+          guidance: reply.guidance,
+          observedAt: requestedAt,
+        ),
+      );
       _proposal = !proactive && reply.proposals.isNotEmpty
           ? reply.proposals.first
           : null;
-      _pendingSpeech = reply.text;
+      _pendingSpeech = reply.speechText ?? reply.text;
       _speechExpires = reply.expiresAt;
+      final recommendations =
+          reply.guidance?.recommendations ?? const <String>[];
+      if (recommendations.isNotEmpty) {
+        _precautionSpeech =
+            'Nếu tình huống này vẫn còn: ${recommendations.take(2).join(' ')}';
+        _precautionExpires = reply.guidance?.precautionExpiresAt;
+      }
       await _deliverSpeech();
     } on AssistantException catch (error) {
       if (epoch == _epoch) _error = proactive ? null : error.message;
@@ -260,6 +292,9 @@ class AssistantController {
   }
 
   void _queueErrorSpeech() {
+    _requiresLiveContext = false;
+    _requestedRevision = null;
+    _evidenceExpires = null;
     _requestContext = snapshot();
     _requestedAt = DateTime.now();
     _pendingSpeech = _error;
@@ -267,24 +302,60 @@ class AssistantController {
   }
 
   Future<void> _deliverSpeech() async {
-    final text = _pendingSpeech;
-    if (text == null) return;
-    if (_speechExpires == null ||
+    var text = _pendingSpeech;
+    if ((text == null && _precautionSpeech == null) || _deliveringSpeech) {
+      return;
+    }
+    if (text == null ||
+        _speechExpires == null ||
         DateTime.now().isAfter(_speechExpires!) ||
         !_contextValid()) {
       _pendingSpeech = null;
-      return;
+      // Only server-rendered precaution actions outlive visual observations.
+      // No expired observation is read as a current fact after an audio warning.
+      if (_precautionExpires == null ||
+          !DateTime.now().isBefore(_precautionExpires!) ||
+          _requestContext == null ||
+          _requestedAt == null ||
+          snapshot().status == NavigationStatus.paused ||
+          DateTime.now().difference(_requestedAt!) >
+              const Duration(seconds: 30) ||
+          (_requiresLiveContext &&
+              (_requestSceneKey != _situation().sceneKey ||
+                  !AssistantProactivityPolicy.contextStillCurrent(
+                    _requestContext!,
+                    snapshot(),
+                    _requestedAt!,
+                    DateTime.now(),
+                  )))) {
+        _precautionSpeech = null;
+        return;
+      }
+      text = _precautionSpeech;
     }
+    if (text == null) return;
     try {
-      if (canSpeak() && await speak(text)) _pendingSpeech = null;
+      _deliveringSpeech = true;
+      final epoch = _epoch;
+      if (canSpeak() && await speak(text) && epoch == _epoch) {
+        _pendingSpeech = null;
+        _precautionSpeech = null;
+      }
     } catch (_) {
       // Native TTS failure must not escape the assistant's optional timer.
       _pendingSpeech = null;
+      _precautionSpeech = null;
+    } finally {
+      _deliveringSpeech = false;
     }
   }
 
-  Future<void> _tick() async {
+  Future<void> _tick() => checkProactive();
+
+  /// Called by a bounded local timer. Never called for every camera frame.
+  Future<void> checkProactive() async {
     if (_disposed) return;
+    final situation = _situation();
     await _deliverSpeech();
     if (_busy ||
         !service.paired ||
@@ -292,14 +363,19 @@ class AssistantController {
         !canProactivelyRequest() ||
         (_lastInteraction != null &&
             DateTime.now().difference(_lastInteraction!) <
-                const Duration(seconds: 120)) ||
-        _statusSince == null ||
-        DateTime.now().difference(_statusSince!) <
-            const Duration(seconds: 10)) {
+                const Duration(seconds: 120) &&
+            !situation.events.any((e) => e.kind == 'watchMatch'))) {
       return;
     }
     final p = snapshot();
-    final event = _policy.candidate(p, DateTime.now());
+    final now = DateTime.now();
+    final situationEvent = _policy.candidateSituation(situation, now);
+    final event =
+        situationEvent?.kind ??
+        (_statusSince != null &&
+                now.difference(_statusSince!) >= const Duration(seconds: 10)
+            ? _policy.candidate(p, now)
+            : null);
     if (event != null) {
       await ask(
         'Giải thích ngắn ngữ cảnh đáng chú ý này, tránh nhắc lại chỉ dẫn hoặc cảnh báo đã phát.',
@@ -321,6 +397,7 @@ class AssistantController {
     }
     _proposal = null;
     _pendingSpeech = null;
+    _precautionSpeech = null;
     _publish();
     try {
       await onConfirmed(proposal);
@@ -339,8 +416,15 @@ class AssistantController {
   void invalidate() {
     ++_epoch;
     service.cancel();
+    _activeProactive = false;
+    _requiresLiveContext = true;
+    _requestedRevision = null;
+    _evidenceExpires = null;
     _proposal = null;
     _pendingSpeech = null;
+    _precautionSpeech = null;
+    _precautionExpires = null;
+    _requestSceneKey = null;
     _busy = false;
     _publish();
   }

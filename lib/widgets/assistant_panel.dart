@@ -45,6 +45,11 @@ class AssistantPanel extends StatelessWidget {
               ),
             if (state.error != null)
               Text(state.error!, style: const TextStyle(color: Colors.orange)),
+            if (latest?.guidance?.evidenceSources.isNotEmpty ?? false)
+              Text(
+                latest!.evidenceLabel,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             if (state.proposal != null)
               AssistantProposalControls(
                 controller: controller,

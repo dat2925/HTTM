@@ -20,6 +20,7 @@ import '../services/tts_service.dart';
 import '../services/voice_service.dart';
 import '../services/voice_command_router.dart';
 import '../services/assistant_service.dart';
+import '../services/situation_engine.dart';
 import '../models/assistant_state.dart';
 import 'assistant_controller.dart';
 
@@ -54,10 +55,13 @@ class SessionController {
   final AiAssistantService _assistantService;
   List<DetectedObject> _latestObjects = const [];
   DateTime? _yoloAt;
+  DateTime? _lastPerceptionFailureAt;
   Uint8List? _latestJpeg;
   DateTime? _jpegAt;
+  final _situationEngine = SituationEngine();
   late final AssistantController assistant = AssistantController(
     service: _assistantService,
+    situationEngine: _situationEngine,
     snapshot: () => routeSnapshot,
     detections: () => _latestObjects,
     yoloUpdatedAt: () => _yoloAt,
@@ -69,7 +73,6 @@ class SessionController {
         !_cameraBorrowed &&
         !_navigationPaused &&
         !_isListening &&
-        !_wasDangerous &&
         (_obstacleUntil == null || DateTime.now().isAfter(_obstacleUntil!)) &&
         (_lastRouteSpokenAt == null ||
             DateTime.now().difference(_lastRouteSpokenAt!) >
@@ -79,7 +82,6 @@ class SessionController {
         !_cameraBorrowed &&
         !_navigationPaused &&
         !_isListening &&
-        !_wasDangerous &&
         _pendingDestination == null,
   );
 
@@ -429,6 +431,11 @@ class SessionController {
     _captureTimer?.cancel();
     _captureTimer = null;
     _running = false;
+    _latestObjects = const [];
+    _yoloAt = null;
+    _latestJpeg = null;
+    _jpegAt = null;
+    _situationEngine.clearPerception();
     if (!_disposed) {
       _stateController.add(const SessionRunning(statusText: 'AI đã dừng'));
     }
@@ -448,9 +455,13 @@ class SessionController {
     XFile? image;
     try {
       image = await _useCamera<XFile>(_frameSource.captureFrame);
+      final capturedAt = DateTime.now();
       try {
-        _latestJpeg = await image.readAsBytes();
-        _jpegAt = DateTime.now();
+        final jpeg = await image.readAsBytes();
+        if (!_disposed && _running && epoch == _perceptionEpoch) {
+          _latestJpeg = jpeg;
+          _jpegAt = capturedAt;
+        }
       } catch (_) {
         // Assistant caching must never fail the existing YOLO pipeline.
         _latestJpeg = null;
@@ -459,9 +470,26 @@ class SessionController {
       cameraIdle.complete();
       final result = await _detectionService.detect(image);
       if (_disposed || !_running || epoch != _perceptionEpoch) return;
+      if (!SituationEngine.fresh(
+        capturedAt,
+        DateTime.now(),
+        SituationEngine.detectionTtl,
+      )) {
+        _latestObjects = const [];
+        _yoloAt = null;
+        _perceptionUnavailable();
+        cameraError = 'Kết quả nhận diện đã cũ. Đang chờ khung hình mới.';
+        _stateController.add(SessionRunning(statusText: cameraError!));
+        return;
+      }
       cameraError = null;
       _latestObjects = result.objects;
-      _yoloAt = DateTime.now();
+      _yoloAt = capturedAt;
+      _situationEngine.observeDetections(
+        result.objects,
+        capturedAt,
+        DateTime.now(),
+      );
       final latencyMs = DateTime.now().difference(startedAt).inMilliseconds;
       final fps = latencyMs > 0 ? 1000 / latencyMs : 0.0;
       _frameController.add(
@@ -476,6 +504,7 @@ class SessionController {
       await _processResult(result, epoch);
     } on CameraException {
       if (_running && epoch == _perceptionEpoch) {
+        _perceptionUnavailable();
         cameraError = 'Lỗi chụp ảnh từ camera.';
         _stateController.add(
           const SessionRunning(statusText: 'Lỗi chụp ảnh từ camera.'),
@@ -483,11 +512,13 @@ class SessionController {
       }
     } on AiDetectionException catch (error) {
       if (_running && epoch == _perceptionEpoch) {
+        _perceptionUnavailable();
         cameraError = error.message;
         _stateController.add(SessionRunning(statusText: error.message));
       }
     } catch (_) {
       if (!_disposed && _running && epoch == _perceptionEpoch) {
+        _perceptionUnavailable();
         cameraError = 'Nhận diện tạm thời không khả dụng. GPS vẫn hoạt động.';
         _stateController.add(SessionRunning(statusText: cameraError!));
       }
@@ -515,13 +546,17 @@ class SessionController {
         _wasDangerous = false;
         _stateController.add(
           SessionRunning(
-            statusText: 'Phía trước chưa phát hiện vật cản.',
+            statusText:
+                'Camera chưa ghi nhận đối tượng; chưa xác định được lối đi.',
             subStatusText: routeText == null ? null : 'Route: $routeText',
           ),
         );
         if (shouldSpeakSafe) {
-          await _speak('Chưa phát hiện vật cản phía trước.');
-          _lastSpokenWarning = 'Chưa phát hiện vật cản phía trước.';
+          await _speak(
+            'Camera chưa ghi nhận đối tượng; chưa xác định được lối đi.',
+          );
+          _lastSpokenWarning =
+              'Camera chưa ghi nhận đối tượng; chưa xác định được lối đi.';
           _lastSpokenAt = DateTime.now();
           _lastSpokenDanger = null;
         }
@@ -531,10 +566,9 @@ class SessionController {
 
     _emptyCycles = 0;
     _wasDangerous = true;
-    _obstacleUntil = DateTime.now().add(const Duration(seconds: 5));
     final decisionSource = routeText == null
-        ? 'Camera: ${_positionLabel(warning.object.position)} bị chắn'
-        : 'Route: $routeText · Camera: ${_positionLabel(warning.object.position)} bị chắn';
+        ? 'Camera: đối tượng ở ${_positionLabel(warning.object.position)} khung hình'
+        : 'Route: $routeText · Camera: đối tượng ở ${_positionLabel(warning.object.position)} khung hình';
     _stateController.add(
       SessionAlerting(
         statusText: warning.text,
@@ -553,19 +587,43 @@ class SessionController {
         warning.danger == DangerLevel.high &&
         _lastSpokenDanger != DangerLevel.high;
     if (!sameWarningCoolingDown || canInterrupt) {
-      if (warning.danger == DangerLevel.high) {
-        await HapticFeedback.heavyImpact();
-      } else if (warning.danger == DangerLevel.medium) {
-        await HapticFeedback.mediumImpact();
+      try {
+        if (warning.danger == DangerLevel.high) {
+          await HapticFeedback.heavyImpact();
+        } else if (warning.danger == DangerLevel.medium) {
+          await HapticFeedback.mediumImpact();
+        }
+      } catch (_) {
+        /* Missing haptics must not block the local spoken warning. */
       }
       if (_disposed || !_running || epoch != _perceptionEpoch || _isListening) {
         return;
       }
       if (await _speak(warning.text, priority: 3)) {
+        _obstacleUntil = DateTime.now().add(const Duration(seconds: 5));
         _lastSpokenWarning = warning.text;
         _lastSpokenAt = now;
         _lastSpokenDanger = warning.danger;
       }
+    }
+  }
+
+  void _perceptionUnavailable() {
+    _latestObjects = const [];
+    _yoloAt = null;
+    _situationEngine.sensorUnavailable(DateTime.now());
+    final now = DateTime.now();
+    if (!_isListening &&
+        (_lastPerceptionFailureAt == null ||
+            now.difference(_lastPerceptionFailureAt!) >=
+                const Duration(seconds: 30))) {
+      _lastPerceptionFailureAt = now;
+      unawaited(
+        _speak(
+          'Chưa có nhận diện camera mới. Cảnh báo vật cản đang thiếu dữ liệu.',
+          priority: 2,
+        ),
+      );
     }
   }
 
@@ -698,6 +756,18 @@ class SessionController {
       assistant.invalidate();
     }
     switch (command.kind) {
+      case VoiceCommandKind.monitor:
+        _situationEngine.watch(command.monitorCategory, DateTime.now());
+        final message = _assistantService.proactiveEnabled
+            ? 'Theo dõi nhóm đối tượng ở giữa khung hình trong hai phút khi camera nhận diện đang chạy. Tôi chưa theo dõi được từng đối tượng riêng.'
+            : 'Đã ghi nhận yêu cầu hai phút. Hãy bật Thông tin chủ động và nhận diện camera để nhận thông báo theo dõi.';
+        _stateController.add(SessionRunning(statusText: message));
+        await _speak(message);
+        return;
+      case VoiceCommandKind.stopMonitoring:
+        _situationEngine.watch(null, DateTime.now());
+        await _speak('Đã dừng theo dõi theo yêu cầu.');
+        return;
       case VoiceCommandKind.confirm:
         if (_pendingDestination != null) {
           await confirmPendingDestination();
@@ -824,8 +894,8 @@ class SessionController {
     XFile? image;
     try {
       image = await _useCamera<XFile>(_frameSource.captureFrame);
-      final bytes = await image.readAsBytes();
       final capturedAt = DateTime.now();
+      final bytes = await image.readAsBytes();
       _latestJpeg = bytes;
       _jpegAt = capturedAt;
       return AssistantImage(bytes, capturedAt);

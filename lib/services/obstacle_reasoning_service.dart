@@ -13,6 +13,32 @@ class ObstacleWarning {
 }
 
 class ObstacleReasoningService {
+  static String category(String name) => switch (name) {
+    'person' => 'person',
+    'bicycle' || 'motorcycle' || 'car' || 'bus' || 'truck' => 'vehicle',
+    'chair' || 'bench' || 'backpack' || 'suitcase' => 'obstacle',
+    _ => 'other',
+  };
+
+  /// Counts and image regions are observable; distance and clearance are not.
+  List<String> summarize(List<DetectedObject> objects) {
+    final groups = <String, Map<String, int>>{};
+    for (final object in objects) {
+      final group = groups.putIfAbsent(object.position, () => {});
+      group.update(object.className, (n) => n + 1, ifAbsent: () => 1);
+    }
+    return [
+      for (final position in ['center', 'left', 'right'])
+        if (groups[position] != null)
+          '${switch (position) {
+                'left' => 'Trái',
+                'right' => 'Phải',
+                _ => 'Giữa',
+              }} khung hình: '
+              '${(groups[position]!.entries.toList()..sort((a, b) => a.key.compareTo(b.key))).map((e) => '${e.value} ${_vietnameseNames[e.key] ?? 'đối tượng'}').join(', ')}.',
+    ];
+  }
+
   static const Map<String, String> _vietnameseNames = {
     'person': 'người',
     'bicycle': 'xe đạp',
@@ -30,22 +56,35 @@ class ObstacleReasoningService {
   ObstacleWarning? selectWarning(List<DetectedObject> objects) {
     if (objects.isEmpty) return null;
     final ranked = List<DetectedObject>.of(objects)
-      ..sort((a, b) => _priority(b).compareTo(_priority(a)));
+      ..sort((a, b) {
+        final priority = _priority(b).compareTo(_priority(a));
+        return priority != 0 ? priority : a.className.compareTo(b.className);
+      });
     final selected = ranked.first;
     final name = _vietnameseNames[selected.className] ?? 'vật cản';
 
-    final text = switch ((selected.position, selected.danger)) {
-      ('center', DangerLevel.high) => 'Cảnh báo. Có $name rất gần phía trước.',
-      ('center', DangerLevel.medium) => 'Phía trước có $name.',
-      ('left', DangerLevel.high) => 'Có $name gần bên trái.',
-      ('right', DangerLevel.high) => 'Có $name gần bên phải.',
+    final base = switch ((selected.position, selected.danger)) {
+      ('center', DangerLevel.high) =>
+        'Camera ghi nhận $name ở giữa khung hình. Nên dừng lại kiểm tra.',
+      ('center', DangerLevel.medium) =>
+        'Camera ghi nhận $name ở giữa khung hình.',
+      ('left', DangerLevel.high) => 'Camera ghi nhận $name bên trái.',
+      ('right', DangerLevel.high) => 'Camera ghi nhận $name bên phải.',
       ('left', _) => 'Có $name bên trái.',
       ('right', _) => 'Có $name bên phải.',
-      _ => 'Phía trước có $name.',
+      _ => 'Camera ghi nhận $name ở giữa khung hình.',
     };
+    final regions = objects.map((o) => o.position).toSet().toList()..sort();
+    final extra = objects.length > 1
+        ? ' ${regions.length > 1 ? 'Có nhiều đối tượng ở ${regions.map((r) => switch (r) {
+                  'left' => 'trái',
+                  'right' => 'phải',
+                  _ => 'giữa',
+                }).join(', ')} khung hình.' : 'Có nhiều đối tượng trong vùng này.'}'
+        : '';
 
     return ObstacleWarning(
-      text: text,
+      text: '$base$extra',
       danger: selected.danger,
       object: selected,
     );

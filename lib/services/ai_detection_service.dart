@@ -79,11 +79,11 @@ class AiDetectionService {
     final response = await http.Response.fromStream(streamed);
     if (response.statusCode != 200) {
       developer.log(
-        'Detection request failed: status=${response.statusCode}, body=${response.body}',
+        'Detection request failed: status=${response.statusCode}',
         name: 'AiDetectionService',
       );
       throw AiDetectionException(
-        'AI Server lỗi (${response.statusCode}): ${response.body}',
+        'AI Server lỗi (${response.statusCode}). Hãy thử lại.',
       );
     }
     final decoded = jsonDecode(response.body);

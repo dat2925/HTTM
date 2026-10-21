@@ -33,10 +33,21 @@ void main() {
     ]);
 
     expect(warning?.object, centerMedium);
-    expect(warning?.text, 'Phía trước có người.');
+    expect(
+      warning?.text,
+      startsWith('Camera ghi nhận người ở giữa khung hình.'),
+    );
+    expect(warning?.text, contains('nhiều đối tượng'));
   });
 
   test('empty detections produce no warning', () {
     expect(ObstacleReasoningService().selectWarning(const []), isNull);
+  });
+  test('detection ordering does not generate a different spoken warning', () {
+    final reasoning = ObstacleReasoningService();
+    expect(
+      reasoning.selectWarning([centerMedium, leftHigh])!.text,
+      reasoning.selectWarning([leftHigh, centerMedium])!.text,
+    );
   });
 }

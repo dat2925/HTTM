@@ -1,9 +1,40 @@
 import 'package:flutter/services.dart';
+import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_navigation/services/tts_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test(
+    'warning wins when an older AI request is waiting on native stop',
+    () async {
+      const channel = MethodChannel('flutter_tts');
+      final stopped = Completer<void>(), release = Completer<int>();
+      final spoken = <String>[];
+      var firstStop = true;
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method == 'stop' && firstStop) {
+          firstStop = false;
+          stopped.complete();
+          return release.future;
+        }
+        if (call.method == 'speak') spoken.add(call.arguments as String);
+        return 1;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final tts = TtsService();
+      await tts.initialize();
+      final old = tts.speak('AI cũ', priority: 0);
+      await stopped.future;
+      expect(await tts.speak('Cảnh báo mới', priority: 3), true);
+      release.complete(1);
+      expect(await old, false);
+      expect(spoken, ['Cảnh báo mới']);
+      await tts.dispose();
+    },
+  );
   test(
     'native speak failure releases priority and silence remains safe',
     () async {

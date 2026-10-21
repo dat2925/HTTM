@@ -21,7 +21,9 @@ import assistant_router
 def request(**kwargs):
     data = {'request_id': str(uuid4()), 'conversation_id': str(uuid4()), 'message': 'Tôi đang đi tới đâu?',
             'context': {'captured_at': datetime.now(timezone.utc).isoformat(), 'status': 'navigating',
-                        'route_message': 'Sau 20 mét, rẽ trái', 'position': {'lat': 21, 'lng': 105}}}
+                        'route_message': 'Sau 20 mét, rẽ trái', 'position': {'lat': 21, 'lng': 105},
+                        'destination': {'lat': 21.001, 'lng': 105.001}, 'accuracy_meters': 5,
+                        'gps_updated_at': datetime.now(timezone.utc).isoformat()}}
     data.update(kwargs)
     return ChatRequest.model_validate(data)
 
@@ -181,13 +183,13 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase, Fixture):
         body.context.image_captured_at = datetime.now(timezone.utc)
         service = AssistantService(self.settings, self.guard, provider)
         result = await service.chat('client', body)
-        self.assertIn('không xác nhận', result['text'])
+        self.assertEqual(result['safety'], 'advisory_only')
         self.assertEqual(provider.payloads[0]['input'][0]['content'][1]['type'], 'input_image')
         self.assertNotIn('base64', str(service.sessions))
     def test_safety_confirmation_and_ai_directions_are_filtered(self):
         context = request().context
         for text in ['Phía trước an toàn, có thể đi tiếp.', 'You may proceed, the path is safe.', 'Rẽ trái ngay.']:
-            self.assertIn('không thể xác nhận', sanitize_answer(FinalAnswer(kind='information', text=text), context, False))
+            self.assertIn('chưa thể xác nhận', sanitize_answer(FinalAnswer(kind='information', text=text), context, False))
         self.assertEqual(sanitize_answer(FinalAnswer(kind='route_status', text='AI invented direction'), context, False),
             'Chỉ dẫn do bộ dẫn đường cung cấp: Sau 20 mét, rẽ trái')
 
