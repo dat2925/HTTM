@@ -23,6 +23,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final _destinationInput = TextEditingController();
   bool _cameraView = false, _searching = false, _initializing = true;
+  bool _foreground = true;
+  int _searchEpoch = 0;
   String? _error;
   @override
   void initState() {
@@ -45,7 +47,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
   Future<void> _search() async {
     final query = _destinationInput.text.trim();
-    if (query.isEmpty || _searching) return;
+    if (!_foreground || query.isEmpty || _searching) return;
+    final epoch = ++_searchEpoch;
     FocusScope.of(context).unfocus();
     setState(() {
       _searching = true;
@@ -53,11 +56,15 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
     try {
       final place = await widget.controller.findDestination(query);
-      if (mounted) await _confirm(place);
+      if (mounted && _foreground && epoch == _searchEpoch) {
+        await _confirm(place);
+      }
     } catch (error) {
-      if (mounted) setState(() => _error = error.toString());
+      if (mounted && _foreground && epoch == _searchEpoch) {
+        setState(() => _error = error.toString());
+      }
     } finally {
-      if (mounted) setState(() => _searching = false);
+      if (mounted && epoch == _searchEpoch) setState(() => _searching = false);
     }
   }
 
@@ -95,9 +102,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
+      _foreground = false;
+      ++_searchEpoch;
+      _searching = false;
       unawaited(widget.controller.pauseNavigation());
-    } else if (state == AppLifecycleState.resumed && !_initializing) {
-      unawaited(_resume());
+    } else if (state == AppLifecycleState.resumed) {
+      setState(() => _foreground = true);
+      if (!_initializing) unawaited(_resume());
     }
   }
 

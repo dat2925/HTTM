@@ -245,6 +245,7 @@ class SessionController {
     if (_navigationPaused) return _pauseWork ?? Future.value();
     assistant.invalidate();
     _navigationPaused = true;
+    ++_destinationRequest;
     _invalidateVoice();
     stop();
     _routeService.stop();
@@ -687,7 +688,9 @@ class SessionController {
     );
     try {
       final place = await findDestination(destinationQuery);
-      if (_disposed || request != _destinationRequest) return;
+      if (_disposed || _navigationPaused || request != _destinationRequest) {
+        return;
+      }
       assistant.invalidate();
       _pendingDestination = place;
       final confirmation =
@@ -695,7 +698,9 @@ class SessionController {
       _stateController.add(SessionRunning(statusText: confirmation));
       await _ttsService.speak(confirmation);
     } on GeocodingException catch (error) {
-      if (_disposed || request != _destinationRequest) return;
+      if (_disposed || _navigationPaused || request != _destinationRequest) {
+        return;
+      }
       await _ttsService.speak(error.message);
       _stateController.add(
         SessionRunning(
