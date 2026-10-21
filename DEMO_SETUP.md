@@ -1,66 +1,44 @@
-# Smart Navigation Demo Setup
+# Chạy demo dẫn đường đi bộ
 
-## 1. Start the AI server
+## Backend
 
-Use Python 3.10 or 3.11 (64-bit) for the smoothest PyTorch/Ultralytics setup.
+Từ thư mục dự án, dùng virtualenv Python 3.11 trong **ai_server**, không dùng `.venv` ở gốc:
 
 ```powershell
-cd D:\dan_duong\ai_server
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
+cd ai_server
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-The first detection downloads `yolo11n.pt`. Start and test the server while an
-internet connection is available, before the presentation. Windows Firewall may
-ask you to allow Python on private networks; allow it for the phone to connect.
-
-Verify on the laptop: `http://127.0.0.1:8000/health` must show
-`{"status":"ok"}`.
-
-## 2. Find the laptop IP
-
-Run `ipconfig`, find the active Wi-Fi adapter, and copy its IPv4 address. The
-current laptop address is `172.11.42.144`. The phone and laptop must use the
-same Wi-Fi network.
-
-## 3. Run the Flutter app
-
-Connect an Android phone with USB debugging enabled, then run:
+Nếu chưa có virtualenv:
 
 ```powershell
-cd D:\dan_duong
+# Chạy lệnh này từ thư mục gốc dự án, trước khi cd ai_server.
+py -3.11 -m venv ai_server/.venv
+```
+
+`/health` phải có `routing_profile=pedestrian`, `api_version=2`. Routing mặc định dùng Valhalla public; để tự host, đặt `$env:VALHALLA_URL='http://localhost:8002'` trước khi chạy backend. Lần đầu YOLO có thể tải `yolo11n.pt`.
+
+## Flutter Android
+
+```powershell
 flutter pub get
-flutter run --dart-define=AI_SERVER_URL=http://172.11.42.144:8000
+flutter run --dart-define=AI_SERVER_URL=http://<IPv4-laptop>:8000
 ```
 
-Replace `172.11.42.144` if the laptop IPv4 address changes. This setting is
-preferred; the fallback URL is defined once in `lib/config/ai_config.dart`.
-Grant camera permission, confirm the preview appears, and press **Start AI**.
+Nếu clone mới chưa có `.env`, chạy `Copy-Item .env.example .env` trước `flutter pub get` vì `.env` là asset của Flutter. Có thể để file rỗng khi chỉ cấu hình bằng dart-define.
 
-## 4. Pre-demo checklist
+Thay `<IPv4-laptop>` bằng địa chỉ IPv4 hiện tại từ `ipconfig`. Hai máy cùng mạng; cho phép Python qua firewall private network và mở `/health` từ điện thoại trước. Android emulator dùng `10.0.2.2`; `127.0.0.1` trên điện thoại là chính điện thoại.
 
-1. Keep the laptop plugged in and disable sleep.
-2. Start the server and wait for the first model inference to finish.
-3. Confirm `/health` from the phone browser using the laptop IP.
-4. Launch the app with the correct `AI_SERVER_URL`.
-5. Turn the phone media volume up and verify Vietnamese TTS is installed.
+`AI_SERVER_URL` ưu tiên `--dart-define`, rồi `.env`, cuối cùng endpoint có sẵn trong code. Backend cũ trả route ô tô sẽ bị client từ chối; triển khai backend và client v2 cùng nhau.
 
-## 5. Demo scenarios
+## Sử dụng
 
-- Person centered: UI/TTS says `Phía trước có người.`
-- Person close and centered: `Cảnh báo. Có người rất gần phía trước.`
-- Person on the left: `Có người bên trái.` or the near variant.
-- No filtered obstacle for three cycles: UI shows
-  `Phía trước chưa phát hiện vật cản.`
+1. Cho phép vị trí chính xác, micro, camera. Camera lỗi vẫn có bản đồ/GPS.
+2. Đợi marker GPS và vòng sai số. Mũi tên xanh chỉ **đầu điện thoại**; giữ đầu máy hướng phía trước. Bản đồ luôn hướng Bắc.
+3. Nhập địa điểm và xác nhận, hoặc nhấn giữ nói “đi đến ...”, thả nút, rồi nói “xác nhận”. Nhấn giữ trên map để đặt đích thủ công.
+4. Xanh lá là vệt GPS đã đi, xanh dương là phần còn lại, cam là hướng theo lối đi. Nút GPS đưa map trở về vị trí.
+5. “Tôi ở đâu” đọc địa chỉ gần GPS/hướng/sai số; “nhắc lại” đọc hướng dẫn; “dừng dẫn đường” hủy đích.
+6. Sau 30 giây có di chuyển, phần còn lại được tính lại. Vệt đã đi không mất. Màn hình hành trình có nút xóa vệt lưu trên thiết bị.
 
-The app sends one JPEG about every 900 ms and never overlaps requests. Repeated
-warnings have a three-second cooldown. High danger triggers heavy haptic feedback.
-
-## Academic limitation
-
-The MVP estimates proximity only from the detected bounding-box area. It is not
-physical distance or "Depth AI". A production version should replace this with
-Depth Anything V2 Small or MiDaS, add walkable-area segmentation and obstacle
-reasoning, and later consider TFLite/on-device inference for offline operation.
+Kiểm tra đầy đủ và bàn giao: [docs/HANDOFF_PEDESTRIAN.md](docs/HANDOFF_PEDESTRIAN.md). Chưa có xác minh thực địa hoặc hỗ trợ dẫn đường khi khóa màn hình.

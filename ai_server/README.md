@@ -7,7 +7,7 @@ FastAPI + YOLO11n + Valhalla **pedestrian** + Nominatim search/reverse.
 .\.venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Python 3.11 recommended. Health: `/health`; interactive API: `/docs`.
+Python 3.11 or newer is required for the assistant's `asyncio.timeout`. Create the environment with `py -3.11 -m venv ai_server/.venv` from the repository root first. Commands above run from `ai_server`. Health: `/health`; interactive API: `/docs`.
 
 Routing: `/route?from_lat=&from_lng=&to_lat=&to_lng=`. Returns `profile=pedestrian`, geometry `[lat,lng]`, shape-indexed maneuvers, distance/time. Uses `VALHALLA_URL` (default `https://valhalla1.openstreetmap.de`); no driving fallback. Public service needs Internet; self-host for sustained production traffic.
 
@@ -20,6 +20,7 @@ Tests: `.venv\Scripts\python.exe -X utf8 -B -m unittest discover -p "test_*.py" 
 See [handoff](../docs/HANDOFF_PEDESTRIAN.md) for contract changes and phone validation.
 
 Optional OpenAI Assistant: `OPENAI_API_KEY` is read only from this directory's `.env`.
+For a new clone, copy `.env.example` to `.env` only if it does not exist, then set the key locally. Never copy secrets from the reference fork or into Flutter assets.
 Run `python setup_assistant.py` to provision signing/pairing secrets; use
 `--show-pairing-code` to give the device its pairing code, never the OpenAI key.
 Assistant endpoints require HTTPS, device bearer auth, and persistent SQLite
