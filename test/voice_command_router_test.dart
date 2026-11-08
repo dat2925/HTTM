@@ -27,6 +27,15 @@ void main() {
       );
     }
     expect(VoiceCommand.parse('Phía trước có gì?').includeImage, isTrue);
+    expect(VoiceCommand.parse('Xung quanh tôi có gì?').includeImage, isTrue);
+    expect(
+      VoiceCommand.parse('Theo dõi xe phía trước').monitorCategory,
+      'vehicle',
+    );
+    expect(
+      VoiceCommand.parse('Dừng theo dõi').kind,
+      VoiceCommandKind.stopMonitoring,
+    );
   });
   test('QR accepts enrollment only and cannot override backend or include secrets', () {
     expect(

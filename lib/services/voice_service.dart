@@ -17,6 +17,7 @@ class VoiceService {
   bool _initialized = false;
   String _lastResult = '';
   Completer<String?>? _finalResultCompleter;
+  int _generation = 0;
 
   Future<bool> initialize() async {
     if (_initialized) return true;
@@ -32,16 +33,19 @@ class VoiceService {
   }
 
   Future<void> startListening({void Function(String text)? onResult}) async {
+    final generation = ++_generation;
     if (!await initialize()) {
       throw const VoiceException(
         'Không thể dùng nhận dạng giọng nói (thiếu quyền micro hoặc thiết '
         'bị không hỗ trợ).',
       );
     }
+    if (generation != _generation) return;
     _lastResult = '';
     _finalResultCompleter = null;
     await _speech.listen(
       onResult: (result) {
+        if (generation != _generation) return;
         _lastResult = result.recognizedWords;
         onResult?.call(_lastResult);
         // The true final transcript from the recognizer arrives via this
@@ -75,7 +79,14 @@ class VoiceService {
     );
   }
 
-  void dispose() {
-    _speech.cancel();
+  Future<void> cancelListening() async {
+    ++_generation;
+    final completer = _finalResultCompleter;
+    _finalResultCompleter = null;
+    _lastResult = '';
+    if (completer != null && !completer.isCompleted) completer.complete(null);
+    await _speech.cancel();
   }
+
+  void dispose() => unawaited(cancelListening().catchError((Object _) {}));
 }

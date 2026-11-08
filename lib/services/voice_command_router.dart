@@ -7,13 +7,21 @@ enum VoiceCommandKind {
   repeat,
   refresh,
   assistant,
+  monitor,
+  stopMonitoring,
 }
 
 class VoiceCommand {
-  const VoiceCommand(this.kind, {this.destination, this.includeImage = false});
+  const VoiceCommand(
+    this.kind, {
+    this.destination,
+    this.includeImage = false,
+    this.monitorCategory,
+  });
   final VoiceCommandKind kind;
   final String? destination;
   final bool includeImage;
+  final String? monitorCategory;
 
   /// Only established, bounded templates bypass the assistant. A question
   /// containing one of these phrases is still a question, not a navigation action.
@@ -24,6 +32,20 @@ class VoiceCommand {
         .replaceAll(RegExp(r'[.!?,;]+$'), '')
         .trim();
     final lower = normalized.toLowerCase();
+    const monitors = {
+      'theo dõi xe phía trước': 'vehicle',
+      'theo dõi người phía trước': 'person',
+      'theo dõi vật cản phía trước': 'all',
+    };
+    if (monitors.containsKey(lower)) {
+      return VoiceCommand(
+        VoiceCommandKind.monitor,
+        monitorCategory: monitors[lower],
+      );
+    }
+    if (lower == 'dừng theo dõi' || lower == 'hủy theo dõi') {
+      return const VoiceCommand(VoiceCommandKind.stopMonitoring);
+    }
     const commands = {
       'xác nhận': VoiceCommandKind.confirm,
       'xác nhận ai': VoiceCommandKind.confirm,
@@ -69,6 +91,10 @@ class VoiceCommand {
         'nhìn thấy gì',
         'phía trước có gì',
         'mô tả ảnh',
+        'xung quanh tôi',
+        'xung quanh có gì',
+        'mô tả xung quanh',
+        'quan sát giúp',
       ].any(lower.contains),
     );
   }

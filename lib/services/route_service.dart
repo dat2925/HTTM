@@ -561,6 +561,7 @@ class PedestrianRouteService implements RouteService {
     _snapshot = RouteProgress(
       position: _fix?.point,
       headingDegrees: _freshHeading,
+      headingUpdatedAt: _freshHeading == null ? null : _headingAt,
       targetBearing: bearing,
       accuracyMeters: _fix?.accuracy,
       walkedMeters: _walkedMeters,

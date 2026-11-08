@@ -118,6 +118,7 @@ class FakeVoice extends VoiceService {
     return stopGate?.future ?? text;
   }
 
+  @override
   Future<void> cancelListening() async {
     cancels++;
   }

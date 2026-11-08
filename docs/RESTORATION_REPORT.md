@@ -1,5 +1,9 @@
 # Báo cáo khôi phục HTTM từ fork — 21/10/2026
 
+Cập nhật trợ lý ngày 22/10/2026: [Situation-Aware Assistant](SITUATION_ASSISTANT_REPORT.md). Mã hiện đã được mở rộng sau bản khôi phục mô tả dưới đây; xem báo cáo mới để biết những khác biệt về reasoning, freshness, guard, chủ động và giọng nói.
+
+Cập nhật sau kiểm tra: [7 lỗi đã sửa và kết quả hồi quy ngày 22/10](BUGFIX_2026-10-22.md).
+
 ## Phạm vi và nguồn
 
 - Nguồn chỉ đọc: `E:\thieuh\FolderCode\Flutter\HTTM`, nhánh `main`, HEAD `044ea60`, tracking `origin/main`, remote `https://github.com/thieuhua/HTTM.git`.

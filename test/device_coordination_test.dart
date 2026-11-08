@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_navigation/controllers/session_controller.dart';
 import 'package:smart_navigation/services/route_service.dart';
+import 'package:smart_navigation/models/assistant_state.dart';
+import 'package:smart_navigation/services/assistant_service.dart';
 
 import 'assistant_test.dart' show FakeAssistant;
 import 'session_navigation_test.dart' show FakeRoute;
@@ -140,4 +142,39 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 1000));
     expect(tts.spoken.where((s) => s.$2 == 3), hasLength(1));
   });
+
+  test(
+    'camera and navigation continue while AI stalls then times out',
+    () async {
+      final ai = FakeAssistant()..pending = Completer<AssistantReply>();
+      final independentCamera = FakeCamera();
+      final independentDetector = FakeDetector()..result = dangerDetection;
+      final independentRoute = FakeRoute();
+      final independentTts = RecordingTts();
+      final independent = SessionController(
+        frameSource: independentCamera,
+        detectionService: independentDetector,
+        routeService: independentRoute,
+        ttsService: independentTts,
+        assistantService: ai,
+      );
+      addTearDown(independent.dispose);
+      await independent.initialize();
+      final asking = independent.handleUtterance('Có xe chắn, tôi nên làm gì?');
+      await independent.start();
+      await flushDeviceEvents();
+      expect(ai.pending!.isCompleted, false);
+      expect(independentTts.spoken.any((s) => s.$2 == 3), true);
+      expect(independentRoute.started, 1);
+      expect(independentCamera.captures, 1);
+      ai.pending!.completeError(
+        const AssistantException('Timeout mock', code: 'timeout'),
+      );
+      await asking;
+      independentDetector.result = emptyDetection;
+      await Future<void>.delayed(const Duration(milliseconds: 1000));
+      expect(independentDetector.requests, greaterThan(1));
+      expect(independentRoute.stopped, 0);
+    },
+  );
 }

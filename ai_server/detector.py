@@ -35,7 +35,8 @@ def position_for(center_x: float, image_width: int) -> str:
 
 
 def danger_for(area_ratio: float) -> str:
-    # Demo heuristic based on bounding-box size, not true physical distance.
+    # Legacy API field: visual attention priority only. Not distance, collision
+    # probability, velocity or proof that this object intersects a walking route.
     if area_ratio < 0.05:
         return "low"
     if area_ratio < 0.15:
@@ -115,5 +116,5 @@ class YoloObstacleDetector:
         return objects
 
 
-# TODO: Replace the bounding-box proximity heuristic with Depth Anything V2
-# Small or MiDaS when implementing the production depth-estimation pipeline.
+# Integration boundary: measured metric depth/tracking need their own validated
+# sensor timestamps and calibration. Relative monocular depth alone is not metres.

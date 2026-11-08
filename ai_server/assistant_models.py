@@ -38,6 +38,13 @@ class NavigationContext(StrictModel):
     obstacles: list[Obstacle] = Field(default_factory=list, max_length=20)
     yolo_updated_at: datetime | None = None
     image_captured_at: datetime | None = None
+    heading_updated_at: datetime | None = None
+    route_updated_at: datetime | None = None
+    maneuver_index: int = Field(default=0, ge=0)
+    next_maneuver_type: str | None = Field(default=None, max_length=40)
+    next_maneuver_meters: float | None = Field(default=None, ge=0, le=10000000)
+    situation_changes: list[str] = Field(default_factory=list, max_length=12)
+    watch_category: Literal["vehicle", "person", "all"] | None = None
 
 
 class ChatRequest(StrictModel):
@@ -45,7 +52,8 @@ class ChatRequest(StrictModel):
     conversation_id: UUID
     message: str = Field(min_length=1, max_length=1500)
     mode: Literal["user", "proactive"] = "user"
-    event: Literal["offRoute", "error", "poorGps", "headingUnavailable"] | None = None
+    event: Literal["offRoute", "error", "poorGps", "headingUnavailable", "obstacle",
+                   "sceneChanged", "routeChanged", "maneuver", "sensorLost", "gpsRecovered", "watchMatch"] | None = None
     context: NavigationContext
     image_base64: str | None = Field(default=None, max_length=1200000)
 
@@ -60,6 +68,16 @@ class ToolArguments(StrictModel):
     place_id: str | None
 
 
+class GroundedStatement(StrictModel):
+    text: str = Field(max_length=300)
+    sources: list[Literal["camera", "yolo", "gps", "heading", "navigation", "user"]] = Field(max_length=6)
+
+
 class FinalAnswer(StrictModel):
-    kind: Literal["information", "route_status", "uncertain"]
+    kind: Literal["information", "observation", "situation", "precaution", "route_status", "action_proposal", "uncertain"]
     text: str = Field(max_length=700)
+    observations: list[GroundedStatement] = Field(default_factory=list, max_length=3)
+    interpretation: list[GroundedStatement] = Field(default_factory=list, max_length=2)
+    # Bounded precaution actions cannot encode an unobserved detour or crossing permission.
+    recommendations: list[Literal["stop_and_check", "verify_position", "check_signal",
+                                  "ask_assistance", "request_route_refresh"]] = Field(default_factory=list, max_length=2)

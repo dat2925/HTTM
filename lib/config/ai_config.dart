@@ -14,7 +14,7 @@ class AiConfig {
 
   static const Duration captureInterval = Duration(milliseconds: 900);
   static const Duration requestTimeout = Duration(seconds: 20);
-  static const Duration warningCooldown = Duration(seconds: 3);
+  static const Duration warningCooldown = Duration(seconds: 12);
   static const int safeCyclesRequired = 3;
 
   static const Duration routeRefreshInterval = Duration(seconds: 30);

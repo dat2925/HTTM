@@ -29,17 +29,29 @@ class TtsService {
     _priorityUntil = now.add(
       Duration(seconds: (text.length / 10).ceil().clamp(3, 25)),
     );
-    await _tts.stop();
-    if (request != _request) return false;
-    await _tts.speak(text);
-    return true;
+    try {
+      await _tts.stop();
+      if (request != _request) return false;
+      await _tts.speak(text);
+      return true;
+    } catch (_) {
+      if (request == _request) {
+        _priority = 0;
+        _priorityUntil = null;
+      }
+      return false;
+    }
   }
 
   Future<void> silence() async {
     ++_request;
     _priority = 0;
     _priorityUntil = null;
-    await _tts.stop();
+    try {
+      await _tts.stop();
+    } catch (_) {
+      // Audio may be unavailable while the remaining device services recover.
+    }
   }
 
   Future<void> dispose() => silence();

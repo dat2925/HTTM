@@ -204,6 +204,28 @@ void main() {
       isNull,
     );
   });
+  test('context accounts for compass rotation across north', () {
+    final now = DateTime.now();
+    const before = RouteProgress(headingDegrees: 359);
+    expect(
+      AssistantProactivityPolicy.contextStillCurrent(
+        before,
+        const RouteProgress(headingDegrees: 1),
+        now,
+        now,
+      ),
+      true,
+    );
+    expect(
+      AssistantProactivityPolicy.contextStillCurrent(
+        before,
+        const RouteProgress(headingDegrees: 90),
+        now,
+        now,
+      ),
+      false,
+    );
+  });
 
   late FakeAssistant service;
   late AssistantController controller;

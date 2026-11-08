@@ -1,5 +1,7 @@
 # Handoff — OpenAI Assistant, 14/10/2026
 
+Cập nhật 22/10/2026: [Situation-Aware Assistant — kiến trúc, mã nguồn, kiểm thử và giới hạn](SITUATION_ASSISTANT_REPORT.md). Báo cáo mới thay thế mô tả bên dưới về wording filter, schema phản hồi, thời gian YOLO, proactivity và voice expiration; các số liệu kiểm thử/live check bên dưới là lịch sử của phiên trước.
+
 Tích hợp bổ sung trên kiến trúc đi bộ hiện có. Navigation engine, GPS, routing và YOLO không gọi hoặc phụ thuộc vào phản hồi OpenAI.
 
 ## 1. Đã triển khai

@@ -252,8 +252,24 @@ class _AssistantScreenState extends State<AssistantScreen> {
                               : null,
                           child: Padding(
                             padding: const EdgeInsets.all(12),
-                            child: Text(
-                              '${message.proactive ? 'Thông tin chủ động: ' : ''}${message.text}',
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${message.proactive ? 'Thông tin chủ động: ' : ''}${message.text}',
+                                ),
+                                if (message
+                                        .guidance
+                                        ?.evidenceSources
+                                        .isNotEmpty ??
+                                    false)
+                                  Text(
+                                    message.evidenceLabel,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodySmall,
+                                  ),
+                              ],
                             ),
                           ),
                         ),

@@ -37,6 +37,12 @@ void main() {
       ..reply = AssistantReply(
         requestId: 'test',
         text: 'Bạn có thể tìm một công viên gần đây.',
+        guidance: const AssistantGuidance(
+          kind: 'situation',
+          evidenceSources: ['user'],
+          confidence: 'limited',
+          priority: 0,
+        ),
         expiresAt: DateTime.now().add(const Duration(seconds: 15)),
         proposals: [
           AssistantProposal(
@@ -62,6 +68,7 @@ void main() {
     );
     expect(find.text('Xác nhận thao tác'), findsOneWidget);
     expect(session.assistant.state.proposal, isNotNull);
+    expect(find.textContaining('Nguồn'), findsWidgets);
     await tester.ensureVisible(find.text('Xác nhận thao tác'));
     await tester.tap(find.text('Xác nhận thao tác'));
     await tester.pump();

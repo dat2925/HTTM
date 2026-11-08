@@ -19,6 +19,7 @@ class RouteProgress {
     this.currentIndex = 0,
     this.position,
     this.headingDegrees,
+    this.headingUpdatedAt,
     this.targetBearing,
     this.accuracyMeters,
     this.remainingMeters = 0,
@@ -40,6 +41,7 @@ class RouteProgress {
   final int currentIndex;
   final GeoPoint? position;
   final double? headingDegrees;
+  final DateTime? headingUpdatedAt;
   final double? targetBearing;
   final double? accuracyMeters;
   final double remainingMeters;
