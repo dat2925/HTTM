@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+
 import '../config/ai_config.dart';
 import '../models/geo_point.dart';
 import '../models/route_progress.dart';
@@ -15,11 +16,13 @@ class RouteInstruction {
     this.remainingMeters = 0,
     this.key = '',
     this.urgent = false,
+    this.once = false,
   });
   final String text;
   final double remainingMeters;
   final String key;
   final bool urgent;
+  final bool once;
 }
 
 String facingInstruction(double headingDegrees, double bearingDegrees) {
@@ -98,6 +101,12 @@ class PedestrianRouteService implements RouteService {
   NavigationFix? _lastRecordedFix;
   RouteTracker? _tracker;
   RouteMatch? _match;
+  NavigationFix? _courseAnchor;
+  double? _course;
+  DateTime? _courseAt;
+  bool _startAnnounced = false;
+  double _instructionAlong = 0;
+  final Set<String> _turnsReached = {};
   final List<GeoPoint> _trail = [];
   final List<int> _trailBreaks = [];
   double _walkedMeters = 0;
@@ -266,6 +275,9 @@ class PedestrianRouteService implements RouteService {
       if (seconds < 120 &&
           fix.point.distanceTo(previousFix.point) >
               math.max(15, seconds * 4 + fix.accuracy + previousFix.accuracy)) {
+        _course = null;
+        _courseAnchor = null;
+        _arrivalFixes = _offRouteFixes = 0;
         _publish(
           NavigationStatus.poorGps,
           'GPS thay đổi bất thường. Đang kiểm tra lại vị trí.',
@@ -276,6 +288,8 @@ class PedestrianRouteService implements RouteService {
     }
     _fix = fix;
     if (!_hasUsableFix) {
+      _course = null;
+      _courseAnchor = null;
       _arrivalFixes = 0;
       _offRouteFixes = 0;
       _publish(
@@ -286,6 +300,25 @@ class PedestrianRouteService implements RouteService {
       return;
     }
     _recordTrail(fix);
+    if (fix.accuracy > 10) _course = null;
+    final anchor = _courseAnchor;
+    if (anchor != null && fix.accuracy <= 10 && anchor.accuracy <= 10) {
+      final elapsed = fix.timestamp.difference(anchor.timestamp).inSeconds;
+      final distance = anchor.point.distanceTo(fix.point);
+      if (elapsed > 0 &&
+          elapsed <= 15 &&
+          distance >= math.max(6, anchor.accuracy + fix.accuracy) &&
+          distance / elapsed >= 0.5 &&
+          distance / elapsed <= 4) {
+        _course = anchor.point.bearingTo(fix.point);
+        _courseAt = fix.timestamp;
+        _courseAnchor = fix;
+      } else if (elapsed > 15) {
+        _courseAnchor = fix;
+      }
+    } else {
+      _courseAnchor = fix.accuracy <= 10 ? fix : null;
+    }
     final tracker = _tracker;
     if (tracker != null && !_arrived) {
       final match = tracker.update(fix.point, fix.accuracy);
@@ -368,6 +401,9 @@ class PedestrianRouteService implements RouteService {
     _tracker = null;
     _match = null;
     _arrived = false;
+    _startAnnounced = false;
+    _turnsReached.clear();
+    _instructionAlong = 0;
     _routeError = null;
     _lastRequestAt = null;
     _lastRouteAt = null;
@@ -427,6 +463,7 @@ class PedestrianRouteService implements RouteService {
       if (_disposed || !_active || generation != _generation) return false;
       _tracker = RouteTracker(route);
       _match = _tracker!.update(_fix!.point, _fix!.accuracy);
+      _instructionAlong = _match!.alongMeters;
       _plannedFrom = from;
       _lastRouteAt = _now();
       _routeError = null;
@@ -457,6 +494,8 @@ class PedestrianRouteService implements RouteService {
         NavigationStatus.arrived,
         'Đã đến ${_destinationName ?? 'nơi'} .',
         key: 'arrived',
+        once: true,
+        urgent: true,
       );
       return;
     }
@@ -499,45 +538,82 @@ class PedestrianRouteService implements RouteService {
     final target = _tracker!.pointAt(targetMeters);
     // Bearing from the matched path point follows the road instead of cutting across it.
     final bearing = _match!.point.bearingTo(target);
-    final heading = _freshHeading;
+    // Phone orientation is not the pedestrian's direction of travel.
+    final heading =
+        _fix!.accuracy <= 10 &&
+            _courseAt != null &&
+            _now().difference(_courseAt!) < const Duration(seconds: 10)
+        ? _course
+        : null;
     final facing = heading == null ? null : facingInstruction(heading, bearing);
     final approaching =
         toNext <= math.max(10, _fix!.speed * 8 + _fix!.accuracy);
     final street = route.waypoints[index].streetName;
     String message;
     String phase;
-    if (remaining < 3 && _fix!.point.distanceTo(_destination!) > 12) {
+    String? reachedKey;
+    String? reachedInstruction;
+    for (final waypoint in route.waypoints.skip(1)) {
+      final meters = route.cumulativeMeters[waypoint.shapeIndex];
+      final turnKey =
+          '${waypoint.lat.toStringAsFixed(5)},${waypoint.lng.toStringAsFixed(5)}:turn-now';
+      if (waypoint.type != 'arrive' &&
+          (waypoint.instruction.toLowerCase().contains('trái') ||
+              waypoint.instruction.toLowerCase().contains('phải')) &&
+          !_turnsReached.contains(turnKey) &&
+          meters >= _instructionAlong - 1 &&
+          meters >= along - 12 &&
+          meters <= along + math.max(3, _fix!.accuracy)) {
+        reachedKey = turnKey;
+        reachedInstruction = waypoint.instruction;
+        _turnsReached.add(turnKey);
+        break;
+      }
+    }
+    _instructionAlong = along;
+    if (reachedInstruction != null) {
+      message = 'Ngay tại đây, ${reachedInstruction.toLowerCase()}.';
+      phase = 'turn-now';
+    } else if (remaining < 3 && _fix!.point.distanceTo(_destination!) > 12) {
       message =
           'Đã tới cuối lối đi trên bản đồ. Đích còn khoảng ${_fix!.point.distanceTo(_destination!).round()} mét.';
       phase = 'path-end';
+    } else if (approaching && next.type != 'arrive') {
+      message = 'Sau ${toNext.round()} mét, ${next.instruction.toLowerCase()}.';
+      phase = 'approaching';
     } else if (heading == null) {
       message =
-          'Chưa xác định được hướng điện thoại. ${approaching ? 'Còn ${toNext.round()} mét: ${next.instruction}.' : 'Tuyến còn ${remaining.round()} mét.'}';
+          'Đi tiếp theo tuyến. ${next.type == 'arrive' ? 'Còn ${remaining.round()} mét tới đích.' : 'Sau ${toNext.round()} mét, ${next.instruction.toLowerCase()}.'}';
       phase = 'no-heading';
     } else if (facing != 'Đi thẳng') {
       message =
           '$facing để theo lối đi${street.isEmpty ? '' : ' $street'}. Tuyến còn ${remaining.round()} mét.';
       phase = facing!;
-    } else if (approaching && next.type != 'arrive') {
-      message = 'Sau ${toNext.round()} mét, ${next.instruction.toLowerCase()}.';
-      phase = 'approaching';
     } else {
       message =
           'Đi tiếp${street.isEmpty ? '' : ' trên $street'}. ${next.type == 'arrive' ? 'Còn ${remaining.round()} mét tới đích.' : 'Sau ${toNext.round()} mét, ${next.instruction.toLowerCase()}.'}';
       phase = 'continue';
     }
     if (_routeError != null) message = 'Tuyến chưa cập nhật được. $message';
+    final starting = !_startAnnounced;
+    _startAnnounced = true;
     _publish(
       _routeError == null
           ? NavigationStatus.navigating
           : NavigationStatus.error,
-      message,
+      starting
+          ? 'Bắt đầu dẫn đường đến ${_destinationName ?? 'điểm đến'}. $message'
+          : message,
       index: index,
       bearing: bearing,
       remaining: remaining,
       street: street,
-      key:
-          '${next.lat.toStringAsFixed(5)},${next.lng.toStringAsFixed(5)}:$phase',
+      key: starting
+          ? 'journey-start'
+          : reachedKey ??
+                '${next.lat.toStringAsFixed(5)},${next.lng.toStringAsFixed(5)}:$phase',
+      urgent: reachedKey != null,
+      once: starting || reachedKey != null || phase == 'approaching',
     );
   }
 
@@ -556,6 +632,7 @@ class PedestrianRouteService implements RouteService {
     String street = '',
     String? key,
     bool urgent = false,
+    bool once = false,
   }) {
     if (_disposed) return;
     _snapshot = RouteProgress(
@@ -591,6 +668,7 @@ class PedestrianRouteService implements RouteService {
         remainingMeters: _snapshot.remainingMeters,
         key: key ?? status.name,
         urgent: urgent,
+        once: once,
       ),
     );
   }

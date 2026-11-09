@@ -1,13 +1,16 @@
 import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_navigation/models/geo_point.dart';
 import 'package:smart_navigation/models/route_progress.dart';
 import 'package:smart_navigation/models/walking_route.dart';
+import 'package:smart_navigation/models/waypoint.dart';
 import 'package:smart_navigation/services/compass_service.dart';
 import 'package:smart_navigation/services/journey_store.dart';
 import 'package:smart_navigation/services/location_source.dart';
 import 'package:smart_navigation/services/route_planning_service.dart';
 import 'package:smart_navigation/services/route_service.dart';
+
 import 'route_tracker_test.dart' show path;
 
 class MemoryStore extends JourneyStore {
@@ -99,6 +102,100 @@ void main() {
     expect(service.snapshot.status, NavigationStatus.idle);
     expect(planner.requests, isEmpty);
   });
+  test(
+    'start includes first instruction and is not repeated on refresh',
+    () async {
+      final events = <RouteInstruction>[];
+      final subscription = service.instructions.listen(events.add);
+      await service.start();
+      await service.setDestination(0, .001, name: 'Công viên');
+      await service.refresh();
+      await Future<void>.delayed(Duration.zero);
+      final starts = events.where((e) => e.key == 'journey-start').toList();
+      expect(starts, hasLength(1));
+      expect(starts.single.text, contains('Công viên'));
+      expect(starts.single.text, contains('Đi tiếp'));
+      expect(starts.single.once, isTrue);
+      await subscription.cancel();
+    },
+  );
+
+  for (final side in ['trái', 'phải']) {
+    test('announces approaching and crossing a $side turn once', () async {
+      planner.handler = (_, _) async => WalkingRoute(
+        geometry: const [
+          GeoPoint(0, 0),
+          GeoPoint(0, .0002),
+          GeoPoint(.001, .0002),
+        ],
+        waypoints: [
+          const Waypoint(
+            lat: 0,
+            lng: 0,
+            distanceMeters: 0,
+            instruction: 'Đi tiếp',
+          ),
+          Waypoint(
+            lat: 0,
+            lng: .0002,
+            distanceMeters: 0,
+            shapeIndex: 1,
+            instruction: 'Rẽ $side',
+          ),
+          const Waypoint(
+            lat: .001,
+            lng: .0002,
+            distanceMeters: 0,
+            shapeIndex: 2,
+            type: 'arrive',
+            instruction: 'Đã đến nơi',
+          ),
+        ],
+      );
+      final events = <RouteInstruction>[];
+      final subscription = service.instructions.listen(events.add);
+      await service.start();
+      await service.setDestination(.001, .0002);
+      now = now.add(const Duration(seconds: 5));
+      location.add(fix(.0001));
+      now = now.add(const Duration(seconds: 5));
+      location.add(fix(.0002, lat: .00002));
+      now = now.add(const Duration(seconds: 1));
+      location.add(fix(.0002, lat: .00003));
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        events.any(
+          (e) => e.text.contains('Sau') && e.text.contains('rẽ $side'),
+        ),
+        isTrue,
+      );
+      final reached = events.where((e) => e.key.endsWith(':turn-now')).toList();
+      expect(reached, hasLength(1));
+      expect(reached.single.text, contains('rẽ $side'));
+      expect(reached.single.once, isTrue);
+      await subscription.cancel();
+    });
+  }
+
+  test(
+    'GPS course wins over rotated phone and expires with poor GPS',
+    () async {
+      await service.start();
+      await service.setDestination(0, .001);
+      compass.events.add(270);
+      now = now.add(const Duration(seconds: 5));
+      location.add(fix(.0001));
+      expect(service.snapshot.message, isNot(contains('Quay')));
+      compass.events.add(180);
+      expect(service.snapshot.message, isNot(contains('Quay')));
+      now = now.add(const Duration(seconds: 1));
+      location.add(fix(.00011, accuracy: 80));
+      expect(service.snapshot.status, NavigationStatus.poorGps);
+      now = now.add(const Duration(seconds: 1));
+      location.add(fix(.00012));
+      expect(service.snapshot.message, isNot(contains('Quay')));
+    },
+  );
   test('new destination wins when older request finishes last', () async {
     await service.start();
     final old = Completer<WalkingRoute>();
@@ -120,6 +217,19 @@ void main() {
     expect(service.snapshot.status, NavigationStatus.error);
     expect(service.snapshot.remainingPath, isEmpty);
     expect(service.snapshot.destination!.lng, .002);
+  });
+  test('reliable reverse movement ignores phone heading', () async {
+    await service.start();
+    await service.setDestination(0, .001);
+    now = now.add(const Duration(seconds: 5));
+    location.add(fix(.0001));
+    now = now.add(const Duration(seconds: 5));
+    location.add(fix(0));
+    compass.events.add(90);
+    expect(service.snapshot.message, contains('Quay lại'));
+    now = now.add(const Duration(seconds: 1));
+    location.add(fix(.00001, accuracy: 20));
+    expect(service.snapshot.message, isNot(contains('Quay')));
   });
   test('poor GPS cannot complete the journey', () async {
     await service.start();

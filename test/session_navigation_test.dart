@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:camera/camera.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_navigation/controllers/session_controller.dart';
@@ -11,6 +12,7 @@ import 'package:smart_navigation/services/tts_service.dart';
 import 'package:smart_navigation/services/voice_service.dart';
 import 'package:smart_navigation/models/assistant_state.dart';
 import 'package:smart_navigation/services/voice_command_router.dart';
+
 import 'assistant_test.dart' show FakeAssistant;
 
 class NoCamera extends FrameSource {
@@ -105,6 +107,64 @@ class FakeRoute extends RouteService {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('arrival is spoken once and resets for a new journey', () async {
+    final route = FakeRoute(), tts = RecordingTts();
+    final session = SessionController(
+      routeService: route,
+      ttsService: tts,
+      frameSource: NoCamera(),
+    );
+    await session.initialize();
+    const arrival = RouteInstruction(
+      text: 'Đã đến công viên.',
+      key: 'arrived',
+      once: true,
+      urgent: true,
+    );
+    route.events.add(arrival);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    route.events.add(arrival);
+    await Future<void>.delayed(Duration.zero);
+    expect(tts.spoken.where((text) => text == arrival.text), hasLength(1));
+    await session.navigateTo(
+      const Placemark(lat: 0, lng: .001, displayName: 'Mới'),
+    );
+    route.events.add(arrival);
+    await Future<void>.delayed(Duration.zero);
+    expect(tts.spoken.where((text) => text == arrival.text), hasLength(2));
+    await session.dispose();
+  });
+
+  test('turn now bypasses normal cooldown without repeating', () async {
+    final route = FakeRoute(), tts = RecordingTts();
+    final session = SessionController(
+      routeService: route,
+      ttsService: tts,
+      frameSource: NoCamera(),
+    );
+    await session.initialize();
+    route.events.add(
+      const RouteInstruction(
+        text: 'Sau 10 mét, rẽ trái.',
+        key: 'corner:approaching',
+        once: true,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    const turn = RouteInstruction(
+      text: 'Ngay tại đây, rẽ trái.',
+      key: 'corner:turn-now',
+      urgent: true,
+      once: true,
+    );
+    route.events.add(turn);
+    await Future<void>.delayed(Duration.zero);
+    route.events.add(turn);
+    await Future<void>.delayed(Duration.zero);
+    expect(tts.spoken.where((text) => text == turn.text), hasLength(1));
+    await session.dispose();
+  });
   test(
     'main STT keeps known commands local even when assistant unpaired',
     () async {

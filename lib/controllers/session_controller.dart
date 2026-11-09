@@ -102,6 +102,9 @@ class SessionController {
   int _emptyCycles = 0;
   bool _wasDangerous = false;
   RouteInstruction? _lastRoute;
+  final Map<String, RouteInstruction> _pendingRouteSpeech = {};
+  final Set<String> _spokenRouteEvents = {};
+  bool _routeSpeaking = false;
   bool _isListening = false;
   bool _disposed = false;
   String? _lastRouteKey;
@@ -211,6 +214,20 @@ class SessionController {
     unawaited(assistant.initialize());
     _routeSubscription = _routeService.instructions.listen((instruction) {
       _lastRoute = instruction;
+      if (instruction.key == 'poorGps' ||
+          instruction.key == 'offRoute' ||
+          instruction.key == 'error') {
+        _pendingRouteSpeech.clear();
+      }
+      if (instruction.key.endsWith(':turn-now')) {
+        _pendingRouteSpeech.remove(
+          instruction.key.replaceFirst(':turn-now', ':approaching'),
+        );
+      }
+      if (instruction.key == 'arrived') _pendingRouteSpeech.clear();
+      if (instruction.once && !_spokenRouteEvents.contains(instruction.key)) {
+        _pendingRouteSpeech[instruction.key] = instruction;
+      }
       assistant.observe(routeSnapshot);
       if (!_wasDangerous &&
           !_isListening &&
@@ -247,9 +264,15 @@ class SessionController {
   }
 
   Future<void> _speakRoute({bool force = false}) async {
-    final instruction = _lastRoute;
+    final urgent = _pendingRouteSpeech.values.where((event) => event.urgent);
+    final instruction = urgent.isNotEmpty
+        ? urgent.first
+        : _pendingRouteSpeech.isNotEmpty
+        ? _pendingRouteSpeech.values.first
+        : _lastRoute;
     final now = DateTime.now();
     if (_disposed ||
+        _routeSpeaking ||
         instruction == null ||
         _isListening ||
         _pendingDestination != null ||
@@ -258,18 +281,34 @@ class SessionController {
         (_obstacleUntil != null && now.isBefore(_obstacleUntil!))) {
       return;
     }
+    if (!force &&
+        instruction.once &&
+        _spokenRouteEvents.contains(instruction.key)) {
+      return;
+    }
     final since = _lastRouteSpokenAt == null
         ? const Duration(days: 1)
         : now.difference(_lastRouteSpokenAt!);
     if (!force &&
+        !instruction.urgent &&
         (since < const Duration(seconds: 5) ||
-            (_lastRouteKey == instruction.key &&
+            (!instruction.once &&
+                _lastRouteKey == instruction.key &&
                 since < const Duration(seconds: 25)))) {
       return;
     }
     _lastRouteKey = instruction.key;
     _lastRouteSpokenAt = now;
+    final destinationRequest = _destinationRequest;
+    _routeSpeaking = true;
     final spoken = await _speak(instruction.text, priority: 1);
+    _routeSpeaking = false;
+    if (spoken &&
+        instruction.once &&
+        destinationRequest == _destinationRequest) {
+      _spokenRouteEvents.add(instruction.key);
+      _pendingRouteSpeech.remove(instruction.key);
+    }
     if (!spoken && _lastRouteSpokenAt == now) {
       _lastRouteSpokenAt = null;
       _lastRouteKey = null;
@@ -280,6 +319,9 @@ class SessionController {
   Future<void> refreshRoute() => _routeService.refresh();
   Future<void> clearJourney() => _routeService.clearJourney();
   void cancelDestination() {
+    _pendingRouteSpeech.clear();
+    _spokenRouteEvents.clear();
+    _lastRoute = null;
     assistant.invalidate();
     ++_destinationRequest;
     _pendingDestination = null;
@@ -335,6 +377,9 @@ class SessionController {
     ++_destinationRequest;
     _pendingDestination = null;
     _lastRouteKey = null;
+    _lastRouteSpokenAt = null;
+    _pendingRouteSpeech.clear();
+    _spokenRouteEvents.clear();
     return _routeService.setDestination(
       place.lat,
       place.lng,
