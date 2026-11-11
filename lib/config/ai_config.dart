@@ -23,5 +23,9 @@ class AiConfig {
   static const int safeCyclesRequired = 3;
 
   static const Duration routeRefreshInterval = Duration(seconds: 30);
-  static const Duration gpsStaleAfter = Duration(seconds: 15);
+  static const double gpsMaxAccuracyMeters = 50.0;
+  static const Duration guidanceRepeatInterval = Duration(seconds: 8);
+  static const Duration guidanceMinGap = Duration(seconds: 3);
+  static const Duration urgentRepeatInterval = Duration(seconds: 20);
+  static const Duration gpsStaleAfter = Duration(seconds: 30);
 }

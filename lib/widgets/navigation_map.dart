@@ -164,7 +164,7 @@ class _NavigationMapState extends State<NavigationMap> {
                   height: 48,
                   child: Semantics(
                     label:
-                        'Vị trí GPS của bạn. Mũi tên chỉ hướng đầu điện thoại.',
+                        'Vị trí GPS của bạn. Mũi tên chỉ hướng camera sau.',
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         color: Colors.white,
@@ -225,7 +225,7 @@ class _NavigationMapState extends State<NavigationMap> {
                   children: [
                     const Text('↑ Bắc · Bản đồ luôn hướng Bắc'),
                     const Text('Xanh lá: đã đi · Xanh dương: còn lại'),
-                    const Text('Mũi tên xanh: đầu điện thoại'),
+                    const Text('Mũi tên xanh: hướng camera'),
                     const Text('Cam: hướng theo lối đi'),
                     if (_tileError)
                       const Text(

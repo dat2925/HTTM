@@ -36,6 +36,7 @@ class SessionController {
     TtsService? ttsService,
     GeocodingService? geocodingService,
     AiAssistantService? assistantService,
+    DateTime Function()? now,
   }) : _frameSource = frameSource ?? FrameSource(),
        _detectionService = detectionService ?? AiDetectionService(),
        _reasoningService = reasoningService ?? ObstacleReasoningService(),
@@ -43,8 +44,10 @@ class SessionController {
        _voiceService = voiceService ?? VoiceService(),
        _ttsService = ttsService ?? TtsService(),
        _geocodingService = geocodingService ?? GeocodingService(),
-       _assistantService = assistantService ?? AiAssistantService();
+       _assistantService = assistantService ?? AiAssistantService(),
+       _now = now ?? DateTime.now;
 
+  final DateTime Function() _now;
   final FrameSource _frameSource;
   final AiDetectionService _detectionService;
   final ObstacleReasoningService _reasoningService;
@@ -107,6 +110,7 @@ class SessionController {
   bool _routeSpeaking = false;
   bool _isListening = false;
   bool _disposed = false;
+  final Map<String, DateTime> _urgentSpokenAt = {};
   String? _lastRouteKey;
   DateTime? _lastRouteSpokenAt;
   DateTime? _obstacleUntil;
@@ -281,7 +285,7 @@ class SessionController {
         : _pendingRouteSpeech.isNotEmpty
         ? _pendingRouteSpeech.values.first
         : _lastRoute;
-    final now = DateTime.now();
+    final now = _now();
     if (_disposed ||
         _routeSpeaking ||
         instruction == null ||
@@ -302,10 +306,18 @@ class SessionController {
         : now.difference(_lastRouteSpokenAt!);
     if (!force &&
         !instruction.urgent &&
-        (since < const Duration(seconds: 5) ||
+        (since < AiConfig.guidanceMinGap ||
             (!instruction.once &&
                 _lastRouteKey == instruction.key &&
-                since < const Duration(seconds: 25)))) {
+                since < AiConfig.guidanceRepeatInterval))) {
+      return;
+    }
+    if (!force &&
+        instruction.urgent &&
+        !instruction.once &&
+        _urgentSpokenAt[instruction.key] != null &&
+        now.difference(_urgentSpokenAt[instruction.key]!) <
+            AiConfig.urgentRepeatInterval) {
       return;
     }
     _lastRouteKey = instruction.key;
@@ -314,6 +326,9 @@ class SessionController {
     _routeSpeaking = true;
     final spoken = await _speak(instruction.text, priority: 1);
     _routeSpeaking = false;
+    if (spoken && instruction.urgent && !instruction.once) {
+      _urgentSpokenAt[instruction.key] = now;
+    }
     if (spoken &&
         instruction.once &&
         destinationRequest == _destinationRequest) {
@@ -357,6 +372,7 @@ class SessionController {
   void cancelDestination() {
     _pendingRouteSpeech.clear();
     _spokenRouteEvents.clear();
+    _urgentSpokenAt.clear();
     _lastRoute = null;
     assistant.invalidate();
     ++_destinationRequest;
@@ -427,6 +443,7 @@ class SessionController {
     _lastRouteSpokenAt = null;
     _pendingRouteSpeech.clear();
     _spokenRouteEvents.clear();
+    _urgentSpokenAt.clear();
     return _routeService.setDestination(
       place.lat,
       place.lng,

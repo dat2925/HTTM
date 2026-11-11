@@ -29,6 +29,9 @@ String facingInstruction(double headingDegrees, double bearingDegrees) {
   final delta = ((bearingDegrees - headingDegrees + 180) % 360) - 180;
   if (delta.abs() <= 25) return 'Đi thẳng';
   if (delta.abs() >= 150) return 'Quay lại';
+  if (delta.abs() <= 60) {
+    return delta < 0 ? 'Chếch sang trái' : 'Chếch sang phải';
+  }
   return delta < 0 ? 'Quay sang trái' : 'Quay sang phải';
 }
 
@@ -101,10 +104,14 @@ class PedestrianRouteService implements RouteService {
   NavigationFix? _lastRecordedFix;
   RouteTracker? _tracker;
   RouteMatch? _match;
+  NavigationFix? _matchedFix;
   NavigationFix? _courseAnchor;
   double? _course;
   DateTime? _courseAt;
   bool _startAnnounced = false;
+  int? _facingLevel;
+  bool _weakGps = false;
+  int _weakGpsEpisode = 0;
   double _instructionAlong = 0;
   final Set<String> _turnsReached = {};
   final List<GeoPoint> _trail = [];
@@ -177,11 +184,15 @@ class PedestrianRouteService implements RouteService {
       );
       _timer = Timer.periodic(checkInterval, (_) {
         if (!_hasUsableFix) {
-          _publish(
-            NavigationStatus.poorGps,
-            'Vị trí GPS chưa đủ chính xác hoặc đã cũ. Hãy chờ tín hiệu.',
-            urgent: true,
-          );
+          if (_tracker != null && _match != null) {
+            _emitNavigation();
+          } else {
+            _publish(
+              NavigationStatus.poorGps,
+              'Vị trí GPS chưa đủ chính xác hoặc đã cũ. Hãy chờ tín hiệu.',
+              urgent: true,
+            );
+          }
           unawaited(_pollCurrentFix());
         } else {
           _emitNavigation();
@@ -215,7 +226,7 @@ class PedestrianRouteService implements RouteService {
       _fix != null &&
       _fix!.accuracy.isFinite &&
       _fix!.accuracy > 0 &&
-      _fix!.accuracy <= 25 &&
+      _fix!.accuracy <= AiConfig.gpsMaxAccuracyMeters &&
       _now().difference(_fix!.timestamp) <= AiConfig.gpsStaleAfter &&
       _fix!.timestamp.difference(_now()) <= const Duration(seconds: 3);
 
@@ -268,8 +279,8 @@ class PedestrianRouteService implements RouteService {
     }
     final previousFix = _fix;
     if (previousFix != null &&
-        fix.accuracy <= 25 &&
-        previousFix.accuracy <= 25) {
+        fix.accuracy <= AiConfig.gpsMaxAccuracyMeters &&
+        previousFix.accuracy <= AiConfig.gpsMaxAccuracyMeters) {
       final seconds =
           fix.timestamp.difference(previousFix.timestamp).inMilliseconds / 1000;
       if (seconds < 120 &&
@@ -292,11 +303,15 @@ class PedestrianRouteService implements RouteService {
       _courseAnchor = null;
       _arrivalFixes = 0;
       _offRouteFixes = 0;
-      _publish(
-        NavigationStatus.poorGps,
-        'GPS có sai số lớn. Tạm chờ trước khi chỉ hướng.',
-        urgent: true,
-      );
+      if (_tracker != null && _match != null) {
+        _emitNavigation();
+      } else {
+        _publish(
+          NavigationStatus.poorGps,
+          'GPS có sai số lớn. Tạm chờ trước khi chỉ hướng.',
+          urgent: true,
+        );
+      }
       return;
     }
     _recordTrail(fix);
@@ -325,14 +340,17 @@ class PedestrianRouteService implements RouteService {
       final offRoute =
           match.crossTrackMeters > math.max(12, fix.accuracy * 1.8);
       _offRouteFixes = offRoute ? _offRouteFixes + 1 : 0;
-      if (!offRoute) _match = match;
-      final tolerance = fix.accuracy.clamp(5.0, 12.0);
+      if (!offRoute) {
+        _match = match;
+        _matchedFix = fix;
+      }
+      final tolerance = fix.accuracy.clamp(8.0, 25.0);
       final nearEnd =
           !offRoute &&
           tracker.route.lengthMeters - match.alongMeters <= tolerance &&
           fix.point.distanceTo(_destination!) <= tolerance;
       _arrivalFixes = nearEnd ? _arrivalFixes + 1 : 0;
-      if (_arrivalFixes >= 3) {
+      if (_arrivalFixes >= 2) {
         _arrived = true;
         unawaited(_save());
       }
@@ -402,6 +420,8 @@ class PedestrianRouteService implements RouteService {
     _match = null;
     _arrived = false;
     _startAnnounced = false;
+    _facingLevel = null;
+    _weakGps = false;
     _turnsReached.clear();
     _instructionAlong = 0;
     _routeError = null;
@@ -424,6 +444,10 @@ class PedestrianRouteService implements RouteService {
   Future<void> refresh() async {
     if (!_active || _disposed || _destination == null || _arrived) return;
     if (!_hasUsableFix) {
+      if (_tracker != null && _match != null) {
+        _emitNavigation();
+        return;
+      }
       _publish(
         NavigationStatus.poorGps,
         'Chưa có GPS chính xác để cập nhật tuyến.',
@@ -461,8 +485,10 @@ class PedestrianRouteService implements RouteService {
         toLng: destination.lng,
       );
       if (_disposed || !_active || generation != _generation) return false;
+      _facingLevel = null;
       _tracker = RouteTracker(route);
       _match = _tracker!.update(_fix!.point, _fix!.accuracy);
+      _matchedFix = _fix;
       _instructionAlong = _match!.alongMeters;
       _plannedFrom = from;
       _lastRouteAt = _now();
@@ -488,7 +514,23 @@ class PedestrianRouteService implements RouteService {
 
   void _emitNavigation() {
     if (!_active || _disposed) return;
-    if (!_hasUsableFix) return;
+    final usableFix = _hasUsableFix;
+    if (usableFix) {
+      _weakGps = false;
+    } else {
+      if (_tracker == null || _match == null) return;
+      if (!_weakGps) {
+        _weakGps = true;
+        _weakGpsEpisode++;
+        _publish(
+          NavigationStatus.poorGps,
+          'GPS yếu, chỉ hướng có thể kém chính xác.',
+          key: 'weak-gps:$_weakGpsEpisode',
+          once: true,
+          urgent: true,
+        );
+      }
+    }
     if (_arrived) {
       _publish(
         NavigationStatus.arrived,
@@ -505,6 +547,8 @@ class PedestrianRouteService implements RouteService {
         _routeError == null ? NavigationStatus.idle : NavigationStatus.error,
         _routeError ??
             'Đã tìm thấy vị trí. Hãy chọn điểm đến hoặc nói “đi đến ...”.',
+        key: _routeError == null ? 'idle-ready' : 'error',
+        once: _routeError == null,
       );
       return;
     }
@@ -516,6 +560,7 @@ class PedestrianRouteService implements RouteService {
       );
       return;
     }
+    final guidanceFix = usableFix ? _fix! : _matchedFix!;
     final route = _tracker!.route;
     final along = _match!.alongMeters;
     var index = 0;
@@ -531,23 +576,27 @@ class PedestrianRouteService implements RouteService {
       route.cumulativeMeters[next.shapeIndex] - along,
     );
     final remaining = math.max(0.0, route.lengthMeters - along);
-    final lookAhead = (_fix!.speed * 4 + _fix!.accuracy).clamp(6.0, 18.0);
+    final lookAhead = (guidanceFix.speed * 4 + guidanceFix.accuracy).clamp(
+      6.0,
+      18.0,
+    );
     final targetMeters = toNext > 2
         ? math.min(along + lookAhead, route.cumulativeMeters[next.shapeIndex])
         : along + lookAhead;
     final target = _tracker!.pointAt(targetMeters);
     // Bearing from the matched path point follows the road instead of cutting across it.
     final bearing = _match!.point.bearingTo(target);
-    // Phone orientation is not the pedestrian's direction of travel.
+    // Demo assumes the phone points forward, in the user's facing direction.
     final heading =
-        _fix!.accuracy <= 10 &&
-            _courseAt != null &&
-            _now().difference(_courseAt!) < const Duration(seconds: 10)
-        ? _course
-        : null;
-    final facing = heading == null ? null : facingInstruction(heading, bearing);
+        _freshHeading ??
+        (guidanceFix.accuracy <= 10 &&
+                _courseAt != null &&
+                _now().difference(_courseAt!) < const Duration(seconds: 10)
+            ? _course
+            : null);
+    final facing = heading == null ? null : _stableFacing(heading, bearing);
     final approaching =
-        toNext <= math.max(10, _fix!.speed * 8 + _fix!.accuracy);
+        toNext <= math.max(10, guidanceFix.speed * 8 + guidanceFix.accuracy);
     final street = route.waypoints[index].streetName;
     String message;
     String phase;
@@ -563,7 +612,7 @@ class PedestrianRouteService implements RouteService {
           !_turnsReached.contains(turnKey) &&
           meters >= _instructionAlong - 1 &&
           meters >= along - 12 &&
-          meters <= along + math.max(3, _fix!.accuracy)) {
+          meters <= along + math.max(3, guidanceFix.accuracy)) {
         reachedKey = turnKey;
         reachedInstruction = waypoint.instruction;
         _turnsReached.add(turnKey);
@@ -574,9 +623,10 @@ class PedestrianRouteService implements RouteService {
     if (reachedInstruction != null) {
       message = 'Ngay tại đây, ${reachedInstruction.toLowerCase()}.';
       phase = 'turn-now';
-    } else if (remaining < 3 && _fix!.point.distanceTo(_destination!) > 12) {
+    } else if (remaining < 3 &&
+        guidanceFix.point.distanceTo(_destination!) > 12) {
       message =
-          'Đã tới cuối lối đi trên bản đồ. Đích còn khoảng ${_fix!.point.distanceTo(_destination!).round()} mét.';
+          'Đã tới cuối lối đi trên bản đồ. Đích còn khoảng ${guidanceFix.point.distanceTo(_destination!).round()} mét.';
       phase = 'path-end';
     } else if (approaching && next.type != 'arrive') {
       message = 'Sau ${toNext.round()} mét, ${next.instruction.toLowerCase()}.';
@@ -586,19 +636,23 @@ class PedestrianRouteService implements RouteService {
           'Đi tiếp theo tuyến. ${next.type == 'arrive' ? 'Còn ${remaining.round()} mét tới đích.' : 'Sau ${toNext.round()} mét, ${next.instruction.toLowerCase()}.'}';
       phase = 'no-heading';
     } else if (facing != 'Đi thẳng') {
-      message =
-          '$facing để theo lối đi${street.isEmpty ? '' : ' $street'}. Tuyến còn ${remaining.round()} mét.';
+      message = '$facing.';
       phase = facing!;
     } else {
-      message =
-          'Đi tiếp${street.isEmpty ? '' : ' trên $street'}. ${next.type == 'arrive' ? 'Còn ${remaining.round()} mét tới đích.' : 'Sau ${toNext.round()} mét, ${next.instruction.toLowerCase()}.'}';
+      message = next.type == 'arrive'
+          ? 'Đi thẳng. Còn ${remaining.round()} mét tới đích.'
+          : 'Đi thẳng ${toNext.round()} mét, rồi ${next.instruction.toLowerCase()}.';
       phase = 'continue';
     }
-    if (_routeError != null) message = 'Tuyến chưa cập nhật được. $message';
+    if (_routeError != null && phase == 'no-heading') {
+      message = 'Tuyến chưa cập nhật được. $message';
+    }
     final starting = !_startAnnounced;
     _startAnnounced = true;
     _publish(
-      _routeError == null
+      !usableFix
+          ? NavigationStatus.poorGps
+          : _routeError == null
           ? NavigationStatus.navigating
           : NavigationStatus.error,
       starting
@@ -609,12 +663,39 @@ class PedestrianRouteService implements RouteService {
       remaining: remaining,
       street: street,
       key: starting
-          ? 'journey-start'
+          ? 'journey-start:$phase'
           : reachedKey ??
                 '${next.lat.toStringAsFixed(5)},${next.lng.toStringAsFixed(5)}:$phase',
       urgent: reachedKey != null,
       once: starting || reachedKey != null || phase == 'approaching',
     );
+  }
+
+  String _stableFacing(double heading, double bearing) {
+    final delta = ((bearing - heading + 180) % 360) - 180;
+    final magnitude = delta.abs();
+    const boundaries = [25.0, 60.0, 150.0];
+    var level =
+        _facingLevel ??
+        (magnitude <= 25
+            ? 0
+            : magnitude <= 60
+            ? 1
+            : magnitude < 150
+            ? 2
+            : 3);
+    // Require eight degrees beyond either side of a boundary before switching.
+    while (level < 3 && magnitude > boundaries[level] + 8) {
+      level++;
+    }
+    while (level > 0 && magnitude < boundaries[level - 1] - 8) {
+      level--;
+    }
+    _facingLevel = level;
+    if (level == 0) return 'Đi thẳng';
+    if (level == 3) return 'Quay lại';
+    final side = delta < 0 ? 'trái' : 'phải';
+    return level == 1 ? 'Chếch sang $side' : 'Quay sang $side';
   }
 
   double? get _freshHeading =>
