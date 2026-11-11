@@ -14,6 +14,11 @@ class AiConfig {
 
   static const Duration captureInterval = Duration(milliseconds: 900);
   static const Duration requestTimeout = Duration(seconds: 20);
+  static const Duration detectTimeout = Duration(seconds: 4);
+  static const Duration detectorRetryInterval = Duration(seconds: 10);
+  static const Duration destinationConfirmTimeout = Duration(seconds: 30);
+  static const Duration captureTimeout = Duration(seconds: 5);
+  static const Duration cameraInitTimeout = Duration(seconds: 10);
   static const Duration warningCooldown = Duration(seconds: 12);
   static const int safeCyclesRequired = 3;
 

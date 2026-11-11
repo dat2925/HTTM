@@ -1,5 +1,7 @@
 import 'package:camera/camera.dart';
 
+import '../config/ai_config.dart';
+
 /// Owns the single [CameraController] shared by the live preview widget and
 /// the periodic AI capture, so the app never opens two camera streams.
 class FrameSource {
@@ -10,7 +12,13 @@ class FrameSource {
   bool get isReady => _controller?.value.isInitialized ?? false;
 
   Future<void> initialize() async {
-    final cameras = await availableCameras();
+    final cameras = await availableCameras().timeout(
+      AiConfig.cameraInitTimeout,
+      onTimeout: () => throw CameraException(
+        'cameraInitTimeout',
+        'Camera initialization timed out.',
+      ),
+    );
     if (cameras.isEmpty) {
       throw CameraException('noCamera', 'No camera available on this device.');
     }
@@ -27,7 +35,13 @@ class FrameSource {
     await _controller?.dispose();
     _controller = null;
     try {
-      await controller.initialize();
+      await controller.initialize().timeout(
+        AiConfig.cameraInitTimeout,
+        onTimeout: () => throw CameraException(
+          'cameraInitTimeout',
+          'Camera initialization timed out.',
+        ),
+      );
     } catch (_) {
       await controller.dispose();
       rethrow;
@@ -40,7 +54,13 @@ class FrameSource {
     if (controller == null || !controller.value.isInitialized) {
       throw CameraException('notInitialized', 'Camera is not ready.');
     }
-    return controller.takePicture();
+    return controller.takePicture().timeout(
+      AiConfig.captureTimeout,
+      onTimeout: () => throw CameraException(
+        'captureTimeout',
+        'Camera capture timed out.',
+      ),
+    );
   }
 
   Future<void> dispose() async {

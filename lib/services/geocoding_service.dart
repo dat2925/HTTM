@@ -41,7 +41,12 @@ class GeocodingService {
           'body=${response.body}',
           name: 'GeocodingService',
         );
-        throw GeocodingException('Không tìm thấy địa điểm "$query".');
+        if (response.statusCode == 404) {
+          throw GeocodingException('Không tìm thấy địa điểm "$query".');
+        }
+        throw const GeocodingException(
+          'Không kết nối được dịch vụ tìm địa điểm.',
+        );
       }
       final decoded = jsonDecode(response.body);
       if (decoded is! Map<String, dynamic> || decoded['success'] != true) {
@@ -51,7 +56,9 @@ class GeocodingService {
     } on GeocodingException {
       rethrow;
     } catch (_) {
-      throw const GeocodingException('Không thể tìm địa điểm lúc này.');
+      throw const GeocodingException(
+        'Không kết nối được dịch vụ tìm địa điểm.',
+      );
     }
   }
 

@@ -1,7 +1,10 @@
 import 'dart:async';
 
+// ignore: depend_on_referenced_packages
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:smart_navigation/config/ai_config.dart';
 import 'package:smart_navigation/controllers/session_controller.dart';
 import 'package:smart_navigation/services/route_service.dart';
 import 'package:smart_navigation/models/assistant_state.dart';
@@ -176,5 +179,242 @@ void main() {
       expect(independentDetector.requests, greaterThan(1));
       expect(independentRoute.stopped, 0);
     },
+  );
+
+  test(
+    'unhealthy detector speaks once, retries every 10s, and announces recovery',
+    () => fakeAsync((async) {
+      final fCamera = FakeCamera(),
+          fDetector = FakeDetector()..healthy = false,
+          fTts = RecordingTts(),
+          fRoute = FakeRoute();
+      final fSession = SessionController(
+        frameSource: fCamera,
+        detectionService: fDetector,
+        ttsService: fTts,
+        routeService: fRoute,
+        assistantService: FakeAssistant(),
+      );
+      fSession.initialize();
+      async.flushMicrotasks();
+
+      bool? started;
+      fSession.start().then((v) => started = v);
+      async.flushMicrotasks();
+      expect(started, isFalse);
+      expect(
+        fTts.spoken.where(
+          (s) =>
+              s.$1 ==
+              'Cảnh báo vật cản đang tắt vì không kết nối được AI Server. Đang thử lại.',
+        ),
+        hasLength(1),
+      );
+      expect(fSession.isRunning, isFalse);
+
+      // First retry at 10s still unhealthy: must not repeat the offline speech.
+      async.elapse(AiConfig.detectorRetryInterval);
+      expect(
+        fTts.spoken.where(
+          (s) =>
+              s.$1 ==
+              'Cảnh báo vật cản đang tắt vì không kết nối được AI Server. Đang thử lại.',
+        ),
+        hasLength(1),
+      );
+      expect(fSession.isRunning, isFalse);
+
+      // Next retry at 20s succeeds: starts perception and announces recovery.
+      fDetector.healthy = true;
+      async.elapse(AiConfig.detectorRetryInterval);
+      expect(fSession.isRunning, isTrue);
+      expect(
+        fTts.spoken.any((s) => s.$1 == 'Cảnh báo vật cản đã hoạt động lại.'),
+        isTrue,
+      );
+      fSession.dispose();
+      async.flushMicrotasks();
+    }),
+  );
+
+  test(
+    'detector retry timer is canceled on pause, QR borrow, stop, and does not stack',
+    () => fakeAsync((async) {
+      final fCamera = FakeCamera(),
+          fDetector = FakeDetector()..healthy = false,
+          fTts = RecordingTts(),
+          fRoute = FakeRoute();
+      final fSession = SessionController(
+        frameSource: fCamera,
+        detectionService: fDetector,
+        ttsService: fTts,
+        routeService: fRoute,
+        assistantService: FakeAssistant(),
+      );
+      fSession.initialize();
+      async.flushMicrotasks();
+
+      fSession.start();
+      async.flushMicrotasks();
+      fSession.start();
+      async.flushMicrotasks();
+      fDetector.healthGate = Completer<bool>();
+      async.elapse(AiConfig.detectorRetryInterval);
+      // Only one timer should have fired after 10s despite two start() calls.
+      expect(fDetector.healthGate!.isCompleted, isFalse);
+      fDetector.healthGate!.complete(false);
+      fDetector.healthGate = null;
+      async.flushMicrotasks();
+
+      // Pause cancels retry timer.
+      fSession.pauseNavigation();
+      async.flushMicrotasks();
+      fDetector.healthy = true;
+      async.elapse(AiConfig.detectorRetryInterval * 2);
+      expect(fSession.isRunning, isFalse);
+
+      // Resume and fail health again, then borrow camera for QR.
+      fSession.resumeNavigation();
+      async.flushMicrotasks();
+      fDetector.healthy = false;
+      fSession.start();
+      async.flushMicrotasks();
+      fSession.suspendCameraForQr();
+      async.flushMicrotasks();
+      fDetector.healthy = true;
+      async.elapse(AiConfig.detectorRetryInterval * 2);
+      expect(fSession.isRunning, isFalse);
+      fSession.resumeCameraAfterQr(restartPerception: false);
+      async.flushMicrotasks();
+
+      // Fail health again, then stop() (epoch change) cancels retry.
+      fDetector.healthy = false;
+      fSession.start();
+      async.flushMicrotasks();
+      fSession.stop();
+      fDetector.healthy = true;
+      final healthChecks = fDetector.requests;
+      async.elapse(AiConfig.detectorRetryInterval * 2);
+      expect(fSession.isRunning, isFalse);
+      expect(fDetector.requests, healthChecks);
+      fSession.dispose();
+      async.flushMicrotasks();
+    }),
+  );
+
+  test(
+    'detect timeout triggers missing obstacle data warning with cooldown',
+    () => fakeAsync((async) {
+      final fCamera = FakeCamera(),
+          fDetector = FakeDetector()..deferred = true,
+          fTts = RecordingTts(),
+          fRoute = FakeRoute();
+      final fSession = SessionController(
+        frameSource: fCamera,
+        detectionService: fDetector,
+        ttsService: fTts,
+        routeService: fRoute,
+        assistantService: FakeAssistant(),
+      );
+      fSession.initialize();
+      async.flushMicrotasks();
+
+      fSession.start();
+      async.flushMicrotasks();
+      expect(fDetector.requests, 1);
+
+      async.elapse(AiConfig.detectTimeout);
+      expect(
+        fTts.spoken.where(
+          (s) =>
+              s.$1 ==
+              'Chưa có nhận diện camera mới. Cảnh báo vật cản đang thiếu dữ liệu.',
+        ),
+        hasLength(1),
+      );
+      expect(fSession.cameraError, contains('quá thời gian'));
+
+      // Next cycle also times out within 30s cooldown: warning is not repeated.
+      async.elapse(AiConfig.captureInterval + AiConfig.detectTimeout);
+      expect(
+        fTts.spoken.where(
+          (s) =>
+              s.$1 ==
+              'Chưa có nhận diện camera mới. Cảnh báo vật cản đang thiếu dữ liệu.',
+        ),
+        hasLength(1),
+      );
+      fSession.dispose();
+      async.flushMicrotasks();
+    }),
+  );
+
+  test(
+    'hung camera capture and init time out and resumeNavigation restarts GPS immediately',
+    () => fakeAsync((async) {
+      final fCamera = FakeCamera(),
+          fDetector = FakeDetector(),
+          fTts = RecordingTts(),
+          fRoute = FakeRoute();
+      final fSession = SessionController(
+        frameSource: fCamera,
+        detectionService: fDetector,
+        ttsService: fTts,
+        routeService: fRoute,
+        assistantService: FakeAssistant(),
+      );
+      fSession.initialize();
+      async.flushMicrotasks();
+
+      // 1. Capture timeout (5s) triggers perception failure handling.
+      fCamera.captureGate = Completer();
+      fSession.start();
+      async.flushMicrotasks();
+      async.elapse(AiConfig.captureTimeout);
+      expect(fSession.cameraError, 'Lỗi chụp ảnh từ camera.');
+      expect(
+        fTts.spoken.any(
+          (s) =>
+              s.$1 ==
+              'Chưa có nhận diện camera mới. Cảnh báo vật cản đang thiếu dữ liệu.',
+        ),
+        isTrue,
+      );
+
+      // 2. Hung camera during pause does not block GPS restart on resumeNavigation.
+      async.elapse(AiConfig.captureInterval);
+      var pauseDone = false;
+      fSession.pauseNavigation().then((_) => pauseDone = true);
+      async.flushMicrotasks();
+      expect(fRoute.stopped, 1);
+      expect(pauseDone, isFalse);
+
+      var resumeDone = false;
+      fSession.resumeNavigation().then((_) => resumeDone = true);
+      async.flushMicrotasks();
+      expect(fRoute.started, 2); // GPS restarted before camera pause finished!
+      expect(resumeDone, isTrue);
+
+      // Let the hung capture time out so pause & reopen finish in the background.
+      fCamera.captureGate = null;
+      async.elapse(AiConfig.captureTimeout);
+      expect(pauseDone, isTrue);
+      expect(fCamera.ready, isTrue);
+
+      // 3. Camera init timeout (10s) sets cameraError without blocking GPS.
+      fSession.pauseNavigation();
+      async.flushMicrotasks();
+      fCamera.openGate = Completer<void>();
+      fSession.resumeNavigation();
+      async.flushMicrotasks();
+      expect(fRoute.started, 3);
+      async.elapse(AiConfig.cameraInitTimeout);
+      expect(
+        fSession.cameraError,
+        'Camera chưa sẵn sàng. Bản đồ và GPS vẫn hoạt động.',
+      );
+      fSession.dispose();
+      async.flushMicrotasks();
+    }),
   );
 }

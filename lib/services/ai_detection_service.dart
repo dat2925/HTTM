@@ -21,12 +21,20 @@ class AiDetectionService {
   AiDetectionService({
     http.Client? client,
     Duration requestTimeout = AiConfig.requestTimeout,
+    Duration? detectTimeout,
   }) : assert(requestTimeout > Duration.zero),
+       assert(detectTimeout == null || detectTimeout > Duration.zero),
        _client = client ?? http.Client(),
-       _requestTimeout = requestTimeout;
+       _requestTimeout = requestTimeout,
+       _detectTimeout =
+           detectTimeout ??
+           (requestTimeout == AiConfig.requestTimeout
+               ? AiConfig.detectTimeout
+               : requestTimeout);
 
   final http.Client _client;
   final Duration _requestTimeout;
+  final Duration _detectTimeout;
 
   Future<bool> isHealthy() async {
     try {
@@ -46,7 +54,7 @@ class AiDetectionService {
     try {
       // One deadline covers file preparation, upload, headers and response body.
       return await _detect(image, abort).timeout(
-        _requestTimeout,
+        _detectTimeout,
         onTimeout: () {
           abort.complete();
           throw const AiDetectionException(
