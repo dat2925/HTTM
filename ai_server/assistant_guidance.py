@@ -57,7 +57,9 @@ PRECAUTIONS = {
 }
 NAMES = {"person": "người", "motorcycle": "xe máy", "car": "ô tô", "bicycle": "xe đạp",
          "bus": "xe buýt", "truck": "xe tải", "chair": "ghế", "bench": "ghế dài", "dog": "chó",
-         "backpack": "ba lô", "suitcase": "va li"}
+         "backpack": "ba lô", "suitcase": "va li", "pole": "cột", "tree": "cây",
+         "pothole": "ổ gà", "trash_bin": "thùng rác", "signboard": "bảng hiệu",
+         "traffic_light": "đèn giao thông"}
 POSITIONS = {"left": "bên trái", "center": "giữa", "right": "bên phải"}
 
 
@@ -67,7 +69,7 @@ def situation_context(context, has_image=False, now=None):
     for obstacle in clean.obstacles:
         category = ("person" if obstacle.class_name == "person" else "vehicle" if obstacle.class_name in
                     {"bicycle", "motorcycle", "car", "bus", "truck"} else "obstacle" if obstacle.class_name in
-                    {"chair", "bench", "backpack", "suitcase"} else "other")
+                    {"chair", "bench", "backpack", "suitcase", "pole", "tree", "pothole", "trash_bin", "signboard"} else "other")
         key = (obstacle.class_name, category)
         groups[obstacle.position][key] = groups[obstacle.position].get(key, 0) + 1
     detections = [{"position": p, "class_name": name, "category": category, "count": count}

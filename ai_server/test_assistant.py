@@ -186,6 +186,19 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase, Fixture):
         self.assertEqual(result['safety'], 'advisory_only')
         self.assertEqual(provider.payloads[0]['input'][0]['content'][1]['type'], 'input_image')
         self.assertNotIn('base64', str(service.sessions))
+    async def test_invalid_image_returns_400_without_reserving_or_charging_budget(self):
+        provider = FakeProvider()
+        body = request(image_base64=base64.b64encode(b'not-an-image').decode())
+        body.context.image_captured_at = datetime.now(timezone.utc)
+        service = AssistantService(self.settings, self.guard, provider)
+        with patch.object(self.guard, 'reserve', wraps=self.guard.reserve) as reserve_spy:
+            with self.assertRaises(AssistantError) as error:
+                await service.chat('client', body)
+            self.assertEqual(error.exception.status, 400)
+            self.assertEqual(error.exception.code, 'invalid_image')
+            reserve_spy.assert_not_called()
+        self.assertEqual(self.guard.usage('client')['spent_usd'], 0)
+        self.assertEqual(provider.payloads, [])
     def test_safety_confirmation_and_ai_directions_are_filtered(self):
         context = request().context
         for text in ['Phía trước an toàn, có thể đi tiếp.', 'You may proceed, the path is safe.', 'Rẽ trái ngay.']:

@@ -134,13 +134,12 @@ class AssistantService:
             timestamp = request.context.image_captured_at
             if timestamp is None or not -5 <= (now - utc(timestamp)).total_seconds() <= 10:
                 raise AssistantError(409, "stale_image", "Ảnh camera đã cũ. Hãy chụp lại.")
+            image = await asyncio.to_thread(prepare_image, request.image_base64)
         turn_id = self.guard.reserve(client, str(request.request_id), request.mode, request.event)
         actual_cost = None
         try:
             async with asyncio.timeout(self.settings.timeout_seconds):
                 async with self.capacity:
-                    if request.image_base64:
-                        image = await asyncio.to_thread(prepare_image, request.image_base64)
                     result, actual_cost = await self._run(client, request, image)
             return result
         except (TimeoutError, httpx.TimeoutException):
