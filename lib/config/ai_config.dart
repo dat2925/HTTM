@@ -1,5 +1,7 @@
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
+enum DetectionMode { auto, device, server }
+
 class AiConfig {
   AiConfig._();
 
@@ -12,6 +14,20 @@ class AiConfig {
         .replaceAll(RegExp(r'/+$'), '');
   }
 
+  static DetectionMode get detectionMode {
+    const override = String.fromEnvironment('DETECTION_MODE');
+    final value = override.isNotEmpty
+        ? override
+        : (dotenv.isInitialized ? dotenv.env['DETECTION_MODE'] : null);
+    return switch (value?.trim().toLowerCase()) {
+      'device' => DetectionMode.device,
+      'server' => DetectionMode.server,
+      _ => DetectionMode.auto,
+    };
+  }
+
+  static const deviceModelAsset = 'assets/models/httm_yolo11n_ft20.tflite';
+  static const deviceCaptureInterval = Duration(milliseconds: 500);
   static const Duration captureInterval = Duration(milliseconds: 900);
   static const Duration requestTimeout = Duration(seconds: 20);
   static const Duration detectTimeout = Duration(seconds: 4);

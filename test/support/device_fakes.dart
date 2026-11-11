@@ -4,6 +4,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
 import 'package:smart_navigation/models/detection_result.dart';
 import 'package:smart_navigation/services/ai_detection_service.dart';
+import 'package:smart_navigation/services/detection_backend.dart';
 import 'package:smart_navigation/services/frame_source.dart';
 import 'package:smart_navigation/services/tts_service.dart';
 import 'package:smart_navigation/services/voice_service.dart';
@@ -60,7 +61,10 @@ class FakeCamera extends FrameSource {
   }
 }
 
-class FakeDetector extends AiDetectionService {
+class FakeDetector implements ObstacleDetector {
+  @override
+  String get backend => 'server';
+
   bool healthy = true, deferred = false, fail = false;
   Completer<bool>? healthGate;
   int requests = 0;

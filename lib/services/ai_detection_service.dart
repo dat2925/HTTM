@@ -8,6 +8,7 @@ import 'package:http_parser/http_parser.dart';
 
 import '../config/ai_config.dart';
 import '../models/detection_result.dart';
+import 'detection_backend.dart';
 
 class AiDetectionException implements Exception {
   const AiDetectionException(this.message);
@@ -17,7 +18,10 @@ class AiDetectionException implements Exception {
   String toString() => message;
 }
 
-class AiDetectionService {
+class AiDetectionService implements ObstacleDetector {
+  @override
+  String get backend => 'server';
+
   AiDetectionService({
     http.Client? client,
     Duration requestTimeout = AiConfig.requestTimeout,
@@ -36,6 +40,7 @@ class AiDetectionService {
   final Duration _requestTimeout;
   final Duration _detectTimeout;
 
+  @override
   Future<bool> isHealthy() async {
     try {
       final response = await _client
@@ -49,6 +54,7 @@ class AiDetectionService {
     }
   }
 
+  @override
   Future<DetectionResult> detect(XFile image) async {
     final abort = Completer<void>();
     try {

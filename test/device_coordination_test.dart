@@ -9,10 +9,13 @@ import 'package:smart_navigation/controllers/session_controller.dart';
 import 'package:smart_navigation/services/route_service.dart';
 import 'package:smart_navigation/models/assistant_state.dart';
 import 'package:smart_navigation/services/assistant_service.dart';
+import 'package:smart_navigation/services/detection_backend.dart';
+import 'package:smart_navigation/services/on_device_detection_service.dart';
 
 import 'assistant_test.dart' show FakeAssistant;
 import 'session_navigation_test.dart' show FakeRoute;
 import 'support/device_fakes.dart';
+import 'on_device_detection_test.dart' show FakeYoloEngine;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -37,6 +40,65 @@ void main() {
     await session.initialize();
   });
   tearDown(() => session.dispose());
+
+  test('device backend uses 500 ms capture interval after each start', () {
+    fakeAsync((async) {
+      final engine = FakeYoloEngine();
+      final deviceSession = SessionController(
+        frameSource: FakeCamera(),
+        detectionService: HybridDetectionService(
+          server: FakeDetector()..healthy = false,
+          device: OnDeviceDetector(engine: engine),
+        ),
+        ttsService: RecordingTts(),
+        routeService: FakeRoute(),
+        assistantService: FakeAssistant(),
+      );
+      deviceSession.initialize();
+      async.flushMicrotasks();
+      for (var start = 0; start < 2; start++) {
+        deviceSession.start();
+        async.flushMicrotasks();
+        expect(deviceSession.detectionBackend, 'device');
+        final before = engine.predictions;
+        async.elapse(
+          AiConfig.deviceCaptureInterval - const Duration(milliseconds: 1),
+        );
+        expect(engine.predictions, before);
+        async.elapse(const Duration(milliseconds: 1));
+        expect(engine.predictions, before + 1);
+        deviceSession.stop();
+      }
+      deviceSession.dispose();
+      async.flushMicrotasks();
+    });
+  });
+
+  test(
+    'device-only prepare failure never speaks server-unreachable notice',
+    () async {
+      final deviceTts = RecordingTts();
+      final deviceSession = SessionController(
+        frameSource: FakeCamera(),
+        detectionService: HybridDetectionService(
+          server: FakeDetector(),
+          device: OnDeviceDetector(engine: FakeYoloEngine()..failLoad = true),
+          mode: DetectionMode.device,
+        ),
+        ttsService: deviceTts,
+        routeService: FakeRoute(),
+        assistantService: FakeAssistant(),
+      );
+      await deviceSession.initialize();
+      expect(await deviceSession.start(), isFalse);
+      expect(deviceTts.spoken, isNotEmpty);
+      expect(
+        deviceTts.spoken.every((speech) => !speech.$1.contains('AI Server')),
+        isTrue,
+      );
+      await deviceSession.dispose();
+    },
+  );
 
   test('stop during health check cannot start perception', () async {
     detector.healthGate = Completer<bool>();

@@ -13,10 +13,12 @@ class PerceptionPreview extends StatelessWidget {
     super.key,
     required this.controller,
     required this.frames,
+    this.detectionBackend,
   });
 
   final CameraController? controller;
   final Stream<PerceptionFrame> frames;
+  final String Function()? detectionBackend;
 
   @override
   Widget build(BuildContext context) {
@@ -47,6 +49,7 @@ class PerceptionPreview extends StatelessWidget {
                 if (frame == null) return const SizedBox.shrink();
                 return _ReadoutBadge(
                   text:
+                      '${detectionBackend?.call() == 'device' ? 'Máy' : 'Server'} · '
                       '${frame.fps.toStringAsFixed(1)} FPS · '
                       '${frame.latencyMs} ms',
                 );
