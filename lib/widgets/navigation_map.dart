@@ -163,8 +163,7 @@ class _NavigationMapState extends State<NavigationMap> {
                   width: 48,
                   height: 48,
                   child: Semantics(
-                    label:
-                        'Vị trí GPS của bạn. Mũi tên chỉ hướng camera sau.',
+                    label: 'Vị trí GPS của bạn. Mũi tên chỉ hướng camera sau.',
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         color: Colors.white,

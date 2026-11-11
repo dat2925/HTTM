@@ -3,11 +3,16 @@ import '../models/detection_result.dart';
 class ObstacleWarning {
   const ObstacleWarning({
     required this.text,
+    required this.speech,
     required this.danger,
     required this.object,
   });
 
+  /// Full on-screen description.
   final String text;
+
+  /// Short spoken form: every extra second of warning delays route guidance.
+  final String speech;
   final DangerLevel danger;
   final DetectedObject object;
 }
@@ -97,8 +102,17 @@ class ObstacleReasoningService {
                 }).join(', ')} khung hình.' : 'Có nhiều đối tượng trong vùng này.'}'
         : '';
 
+    final speech = switch ((selected.position, selected.danger)) {
+      ('center', DangerLevel.high) =>
+        'Có $name ngay phía trước. Dừng lại kiểm tra.',
+      ('left', _) => 'Có $name bên trái.',
+      ('right', _) => 'Có $name bên phải.',
+      _ => 'Có $name phía trước.',
+    };
+
     return ObstacleWarning(
       text: '$base$extra',
+      speech: speech,
       danger: selected.danger,
       object: selected,
     );

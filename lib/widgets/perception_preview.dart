@@ -34,9 +34,7 @@ class PerceptionPreview extends StatelessWidget {
             stream: frames,
             builder: (context, snapshot) {
               final frame = snapshot.data;
-              return CustomPaint(
-                painter: _OverlayPainter(frame: frame),
-              );
+              return CustomPaint(painter: _OverlayPainter(frame: frame));
             },
           ),
           Positioned(

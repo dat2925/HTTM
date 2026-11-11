@@ -20,6 +20,12 @@ class AiConfig {
   static const Duration captureTimeout = Duration(seconds: 5);
   static const Duration cameraInitTimeout = Duration(seconds: 10);
   static const Duration warningCooldown = Duration(seconds: 12);
+
+  /// Minimum pause between two spoken obstacle warnings, so route guidance
+  /// and the destination dialogue still get airtime in a busy scene.
+  static const Duration obstacleSpeechGap = Duration(seconds: 6);
+  static const Duration obstacleSpeechHold = Duration(seconds: 3);
+  static const Duration destinationReminderAfter = Duration(seconds: 12);
   static const int safeCyclesRequired = 3;
 
   static const Duration routeRefreshInterval = Duration(seconds: 30);

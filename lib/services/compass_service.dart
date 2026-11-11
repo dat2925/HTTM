@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 
 /// Direction the user is facing (degrees, 0 = north), from the device
@@ -5,29 +6,29 @@ import 'package:flutter_compass/flutter_compass.dart';
 /// updates instantly while standing still — required to tell a stationary
 /// user which way to turn before they have taken a single step.
 ///
-/// The app is used with the back camera pointing forward (phone upright or
-/// tilted), so the camera-axis heading is preferred: the plain `heading` is
-/// the azimuth of the top edge and breaks down when the phone is upright.
-/// `heading` remains the fallback where the platform has no camera-mode value.
+/// The value is the azimuth of the phone's top edge, so the phone has to be
+/// held tilted with its top pointing forward (as when reading it), not fully
+/// upright. flutter_compass only fills `headingForCameraMode` on iOS; on
+/// Android that field is always 0, so it must not be used there.
 class CompassService {
   Stream<double> get heading {
     final events = FlutterCompass.events;
     if (events == null) return const Stream<double>.empty();
+    final cameraMode = defaultTargetPlatform == TargetPlatform.iOS;
+    // No accuracy filter: Android reports 15/30/45 for high/medium/low sensor
+    // status, and dropping everything but "high" left the heading frozen.
     return events
-        .where(
-          (event) =>
-              facingDegrees(event.heading, event.headingForCameraMode) !=
-                  null &&
-              (event.accuracy == null ||
-                  event.accuracy! < 0 ||
-                  event.accuracy! <= 25),
-        )
         .map(
-          (event) => facingDegrees(event.heading, event.headingForCameraMode)!,
-        );
+          (event) => facingDegrees(
+            event.heading,
+            cameraMode ? event.headingForCameraMode : null,
+          ),
+        )
+        .where((degrees) => degrees != null)
+        .cast<double>();
   }
 
-  /// Camera-axis heading when available, else the top-edge heading; always
+  /// Camera-axis heading when supplied, else the top-edge heading; always
   /// normalised to [0, 360). Null when neither value is usable.
   static double? facingDegrees(double? heading, double? cameraHeading) {
     final value = cameraHeading != null && cameraHeading.isFinite

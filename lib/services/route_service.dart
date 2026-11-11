@@ -35,6 +35,14 @@ String facingInstruction(double headingDegrees, double bearingDegrees) {
   return delta < 0 ? 'Quay sang trái' : 'Quay sang phải';
 }
 
+/// Where the route lies relative to the way the user faces, as a clock hour
+/// (12 = straight ahead, 3 = right, 6 = behind, 9 = left).
+int clockHour(double headingDegrees, double bearingDegrees) {
+  final delta = ((bearingDegrees - headingDegrees + 180) % 360) - 180;
+  final hour = ((delta / 30).round() % 12 + 12) % 12;
+  return hour == 0 ? 12 : hour;
+}
+
 String cardinalDirection(double degrees) {
   const directions = [
     'Bắc',
@@ -110,6 +118,8 @@ class PedestrianRouteService implements RouteService {
   DateTime? _courseAt;
   bool _startAnnounced = false;
   int? _facingLevel;
+  bool _misaligned = false;
+  int _alignedCount = 0;
   bool _weakGps = false;
   int _weakGpsEpisode = 0;
   double _instructionAlong = 0;
@@ -421,6 +431,7 @@ class PedestrianRouteService implements RouteService {
     _arrived = false;
     _startAnnounced = false;
     _facingLevel = null;
+    _misaligned = false;
     _weakGps = false;
     _turnsReached.clear();
     _instructionAlong = 0;
@@ -595,6 +606,7 @@ class PedestrianRouteService implements RouteService {
             ? _course
             : null);
     final facing = heading == null ? null : _stableFacing(heading, bearing);
+    final misaligned = facing != null && facing != 'Đi thẳng';
     final approaching =
         toNext <= math.max(10, guidanceFix.speed * 8 + guidanceFix.accuracy);
     final street = route.waypoints[index].streetName;
@@ -628,6 +640,13 @@ class PedestrianRouteService implements RouteService {
       message =
           'Đã tới cuối lối đi trên bản đồ. Đích còn khoảng ${guidanceFix.point.distanceTo(_destination!).round()} mét.';
       phase = 'path-end';
+    } else if (misaligned) {
+      // Facing the wrong way matters more than the next turn: say which way
+      // to rotate and, as a clock hour, how far.
+      message = facing == 'Quay lại'
+          ? 'Quay lại.'
+          : '$facing, hướng ${clockHour(heading!, bearing)} giờ.';
+      phase = facing;
     } else if (approaching && next.type != 'arrive') {
       message = 'Sau ${toNext.round()} mét, ${next.instruction.toLowerCase()}.';
       phase = 'approaching';
@@ -635,15 +654,23 @@ class PedestrianRouteService implements RouteService {
       message =
           'Đi tiếp theo tuyến. ${next.type == 'arrive' ? 'Còn ${remaining.round()} mét tới đích.' : 'Sau ${toNext.round()} mét, ${next.instruction.toLowerCase()}.'}';
       phase = 'no-heading';
-    } else if (facing != 'Đi thẳng') {
-      message = '$facing.';
-      phase = facing!;
     } else {
       message = next.type == 'arrive'
           ? 'Đi thẳng. Còn ${remaining.round()} mét tới đích.'
           : 'Đi thẳng ${toNext.round()} mét, rồi ${next.instruction.toLowerCase()}.';
       phase = 'continue';
     }
+    // Tell the user the moment they have turned far enough.
+    final justAligned =
+        _misaligned &&
+        heading != null &&
+        !misaligned &&
+        (phase == 'continue' || phase == 'approaching');
+    if (justAligned) {
+      _alignedCount++;
+      message = 'Đúng hướng. $message';
+    }
+    if (heading != null) _misaligned = misaligned;
     if (_routeError != null && phase == 'no-heading') {
       message = 'Tuyến chưa cập nhật được. $message';
     }
@@ -665,9 +692,15 @@ class PedestrianRouteService implements RouteService {
       key: starting
           ? 'journey-start:$phase'
           : reachedKey ??
-                '${next.lat.toStringAsFixed(5)},${next.lng.toStringAsFixed(5)}:$phase',
-      urgent: reachedKey != null,
-      once: starting || reachedKey != null || phase == 'approaching',
+                (justAligned
+                    ? 'aligned:$_alignedCount'
+                    : '${next.lat.toStringAsFixed(5)},${next.lng.toStringAsFixed(5)}:$phase'),
+      urgent: reachedKey != null || justAligned,
+      once:
+          starting ||
+          reachedKey != null ||
+          justAligned ||
+          phase == 'approaching',
     );
   }
 

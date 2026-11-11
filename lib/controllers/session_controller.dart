@@ -99,7 +99,6 @@ class SessionController {
   StreamSubscription<RouteInstruction>? _routeSubscription;
   bool _running = false;
   bool _requestInProgress = false;
-  String? _lastSpokenWarning;
   DateTime? _lastSpokenAt;
   DangerLevel? _lastSpokenDanger;
   int _emptyCycles = 0;
@@ -118,6 +117,9 @@ class SessionController {
   Timer? _detectorRetryTimer;
   bool _retryingDetector = false;
   Timer? _destinationConfirmTimer;
+  Timer? _destinationReminderTimer;
+  String? _lastObstacleKey;
+  DateTime? _lastClearSpokenAt;
   int _destinationRequest = 0;
   String? cameraError;
   Placemark? _pendingDestination;
@@ -195,13 +197,29 @@ class SessionController {
     }
   }
 
-  Future<bool> _speak(String text, {int priority = 2}) async {
+  /// Above obstacle warnings (3): a prompt the user must answer is useless
+  /// if every detection cuts it off. High-danger haptics still fire.
+  static const int _dialoguePriority = 4;
+  static const String _confirmHint = 'Nói “xác nhận” để đi, hoặc “hủy”.';
+
+  /// Speakers queue behind each other instead of cutting in. Only a prompt
+  /// the user must answer, or a caller passing [interrupt] (high-danger
+  /// obstacle), stops the sentence being spoken.
+  Future<bool> _speak(
+    String text, {
+    int priority = 2,
+    bool interrupt = false,
+  }) async {
     if (_disposed) return false;
     final epoch = _speechEpoch;
     if (!_ttsReady && ttsError == null) await _ensureTts();
     if (_disposed || !_ttsReady || epoch != _speechEpoch) return false;
     try {
-      return await _ttsService.speak(text, priority: priority);
+      return await _ttsService.speak(
+        text,
+        priority: priority,
+        interrupt: interrupt || priority >= _dialoguePriority,
+      );
     } catch (_) {
       return false;
     }
@@ -232,6 +250,13 @@ class SessionController {
         );
       }
       if (instruction.key == 'arrived') _pendingRouteSpeech.clear();
+      if (instruction.key.startsWith('aligned:')) {
+        // Felt at once, even while another sentence is still being spoken.
+        unawaited(HapticFeedback.mediumImpact().catchError((Object _) {}));
+      } else {
+        // The user turned away again before it was spoken.
+        _pendingRouteSpeech.removeWhere((key, _) => key.startsWith('aligned:'));
+      }
       if (instruction.once && !_spokenRouteEvents.contains(instruction.key)) {
         _pendingRouteSpeech[instruction.key] = instruction;
       }
@@ -347,12 +372,33 @@ class SessionController {
   void _clearPendingDestination() {
     _destinationConfirmTimer?.cancel();
     _destinationConfirmTimer = null;
+    _destinationReminderTimer?.cancel();
+    _destinationReminderTimer = null;
     _pendingDestination = null;
+  }
+
+  /// Nominatim names run to a full postal address; two parts identify a place.
+  static String shortPlaceName(String displayName) {
+    final parts = displayName
+        .split(',')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty);
+    return parts.isEmpty ? displayName.trim() : parts.take(2).join(', ');
   }
 
   void _setPendingDestination(Placemark place) {
     _clearPendingDestination();
     _pendingDestination = place;
+    _destinationReminderTimer = Timer(AiConfig.destinationReminderAfter, () {
+      _destinationReminderTimer = null;
+      if (_disposed ||
+          _navigationPaused ||
+          _isListening ||
+          !identical(_pendingDestination, place)) {
+        return;
+      }
+      unawaited(_speak(_confirmHint, priority: _dialoguePriority));
+    });
     _destinationConfirmTimer = Timer(AiConfig.destinationConfirmTimeout, () {
       _destinationConfirmTimer = null;
       // Every utterance bumps _destinationRequest, so compare the pending
@@ -711,13 +757,19 @@ class SessionController {
             subStatusText: routeText == null ? null : 'Route: $routeText',
           ),
         );
-        if (shouldSpeakSafe) {
+        final clearNow = _now();
+        // Not during the destination dialogue, and not on every flicker.
+        if (shouldSpeakSafe &&
+            _pendingDestination == null &&
+            (_lastClearSpokenAt == null ||
+                clearNow.difference(_lastClearSpokenAt!) >=
+                    const Duration(seconds: 20))) {
+          _lastClearSpokenAt = clearNow;
           await _speak(
             'Camera chưa ghi nhận đối tượng; chưa xác định được lối đi.',
           );
-          _lastSpokenWarning =
-              'Camera chưa ghi nhận đối tượng; chưa xác định được lối đi.';
-          _lastSpokenAt = DateTime.now();
+          _lastObstacleKey = null;
+          _lastSpokenAt = _now();
           _lastSpokenDanger = null;
         }
       }
@@ -738,15 +790,30 @@ class SessionController {
       ),
     );
 
-    final now = DateTime.now();
-    final sameWarningCoolingDown =
-        _lastSpokenWarning == warning.text &&
-        _lastSpokenAt != null &&
-        now.difference(_lastSpokenAt!) < AiConfig.warningCooldown;
+    final now = _now();
+    // Keyed by object, side and level: the on-screen text also lists other
+    // objects and would otherwise look new on almost every frame.
+    final key =
+        '${warning.object.className}:${warning.object.position}:${warning.danger.name}';
+    final sinceSpoken = _lastSpokenAt == null
+        ? null
+        : now.difference(_lastSpokenAt!);
+    final coolingDown =
+        sinceSpoken != null &&
+        (sinceSpoken < AiConfig.obstacleSpeechGap ||
+            (_lastObstacleKey == key &&
+                sinceSpoken < AiConfig.warningCooldown));
     final canInterrupt =
         warning.danger == DangerLevel.high &&
         _lastSpokenDanger != DangerLevel.high;
-    if (!sameWarningCoolingDown || canInterrupt) {
+    // Small objects off to the side are shown but not spoken.
+    final minorSide =
+        warning.danger == DangerLevel.low &&
+        warning.object.position != 'center';
+    // While a destination waits for an answer only high danger may speak.
+    final dialogueHold =
+        _pendingDestination != null && warning.danger != DangerLevel.high;
+    if (!minorSide && !dialogueHold && (!coolingDown || canInterrupt)) {
       try {
         if (warning.danger == DangerLevel.high) {
           await HapticFeedback.heavyImpact();
@@ -759,9 +826,13 @@ class SessionController {
       if (_disposed || !_running || epoch != _perceptionEpoch || _isListening) {
         return;
       }
-      if (await _speak(warning.text, priority: 3)) {
-        _obstacleUntil = DateTime.now().add(const Duration(seconds: 5));
-        _lastSpokenWarning = warning.text;
+      if (await _speak(
+        warning.speech,
+        priority: 3,
+        interrupt: warning.danger == DangerLevel.high,
+      )) {
+        _obstacleUntil = DateTime.now().add(AiConfig.obstacleSpeechHold);
+        _lastObstacleKey = key;
         _lastSpokenAt = now;
         _lastSpokenDanger = warning.danger;
       }
@@ -981,9 +1052,9 @@ class SessionController {
       assistant.invalidate();
       _setPendingDestination(place);
       final confirmation =
-          'Địa điểm tìm được: ${place.displayName}. Nói “xác nhận” để dẫn đường, hoặc “hủy”.';
+          'Tìm thấy ${shortPlaceName(place.displayName)}. $_confirmHint';
       _stateController.add(SessionRunning(statusText: confirmation));
-      await _speak(confirmation);
+      await _speak(confirmation, priority: _dialoguePriority);
     } on GeocodingException catch (error) {
       if (_disposed || _navigationPaused || request != _destinationRequest) {
         return;

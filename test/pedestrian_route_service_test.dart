@@ -206,10 +206,10 @@ void main() {
   });
   for (final (heading, instruction) in [
     (90.0, 'Đi thẳng. Còn 111 mét tới đích.'),
-    (130.0, 'Chếch sang trái.'),
-    (50.0, 'Chếch sang phải.'),
-    (180.0, 'Quay sang trái.'),
-    (0.0, 'Quay sang phải.'),
+    (130.0, 'Chếch sang trái, hướng 11 giờ.'),
+    (50.0, 'Chếch sang phải, hướng 1 giờ.'),
+    (180.0, 'Quay sang trái, hướng 9 giờ.'),
+    (0.0, 'Quay sang phải, hướng 3 giờ.'),
     (270.0, 'Quay lại.'),
   ]) {
     test('stationary compass $heading gives $instruction', () async {
@@ -239,20 +239,20 @@ void main() {
       expect(service.snapshot.message, startsWith('Đi thẳng'));
     }
     face(56); // 34 > 25 + 8.
-    expect(service.snapshot.message, 'Chếch sang phải.');
+    expect(service.snapshot.message, startsWith('Chếch sang phải, hướng'));
     for (final delta in [26.0, 24.0, 18.0]) {
       face(90 - delta);
-      expect(service.snapshot.message, 'Chếch sang phải.');
+      expect(service.snapshot.message, startsWith('Chếch sang phải, hướng'));
     }
     await service.refresh(); // Fresh route resets hysteresis at 18 degrees.
-    expect(service.snapshot.message, startsWith('Đi thẳng'));
+    expect(service.snapshot.message, startsWith('Đúng hướng. Đi thẳng'));
     face(56);
     face(74); // 16 < 25 - 8.
-    expect(service.snapshot.message, startsWith('Đi thẳng'));
+    expect(service.snapshot.message, contains('Đi thẳng'));
     face(56);
     face(64); // Hold slight right at 26 degrees.
     await service.setDestination(0, .002);
-    expect(service.snapshot.message, contains('Chếch sang phải.'));
+    expect(service.snapshot.message, contains('Chếch sang phải, hướng'));
   });
 
   test(
@@ -264,12 +264,15 @@ void main() {
       await service.start();
       compass.events.add(0);
       expect(await service.setDestination(0, .001), isTrue);
-      expect(service.snapshot.message, contains('Quay sang phải.'));
+      expect(
+        service.snapshot.message,
+        contains('Quay sang phải, hướng 3 giờ.'),
+      );
       final matched = service.snapshot.remainingPath.first;
       for (var i = 0; i < 3; i++) {
         now = now.add(const Duration(seconds: 1));
         location.add(fix(.0005, accuracy: 80));
-        expect(service.snapshot.message, 'Quay sang phải.');
+        expect(service.snapshot.message, 'Quay sang phải, hướng 3 giờ.');
         expect(service.snapshot.remainingPath.first, matched);
       }
       await Future<void>.delayed(Duration.zero);
@@ -310,7 +313,7 @@ void main() {
     await service.setDestination(0, .001);
     now = now.add(const Duration(seconds: 31));
     compass.events.add(0);
-    expect(service.snapshot.message, 'Quay sang phải.');
+    expect(service.snapshot.message, 'Quay sang phải, hướng 3 giờ.');
     compass.events.add(0);
     await service.refresh();
     await Future<void>.delayed(Duration.zero);
@@ -344,7 +347,7 @@ void main() {
       now = now.add(const Duration(seconds: 6));
       location.add(fix(.0002));
       expect(service.snapshot.headingDegrees, isNull);
-      expect(service.snapshot.message, startsWith('Đi thẳng'));
+      expect(service.snapshot.message, startsWith('Đúng hướng. Đi thẳng'));
       now = now.add(const Duration(seconds: 1));
       location.add(fix(.00021, accuracy: 20));
       expect(service.snapshot.message, startsWith('Đi tiếp theo tuyến.'));
@@ -363,7 +366,7 @@ void main() {
       now = now.add(const Duration(seconds: 1));
       compass.events.add(0);
       expect(service.snapshot.status, NavigationStatus.error);
-      expect(service.snapshot.message, 'Quay sang phải.');
+      expect(service.snapshot.message, 'Quay sang phải, hướng 3 giờ.');
     },
   );
 
