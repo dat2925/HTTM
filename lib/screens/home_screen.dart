@@ -242,8 +242,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                         Text(
                           p.headingDegrees == null
-                              ? 'Hướng chưa rõ: giữ camera sau hướng về phía trước, tránh gần kim loại.'
-                              : 'Hướng camera: ${cardinalDirection(p.headingDegrees!)} ${p.headingDegrees!.round()}°'
+                              ? 'Hướng chưa rõ: cầm nghiêng, đầu điện thoại hướng về phía trước, tránh gần kim loại.'
+                              : 'Đầu điện thoại: ${cardinalDirection(p.headingDegrees!)} ${p.headingDegrees!.round()}°'
                                     '${p.targetBearing == null ? '' : ' · Lối đi: ${p.targetBearing!.round()}°'}',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
