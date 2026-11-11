@@ -1,6 +1,7 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+import '../config/ai_config.dart';
 import '../models/detection_result.dart';
 import '../models/perception_frame.dart';
 
@@ -49,7 +50,7 @@ class PerceptionPreview extends StatelessWidget {
                 if (frame == null) return const SizedBox.shrink();
                 return _ReadoutBadge(
                   text:
-                      '${detectionBackend?.call() == 'device' ? 'Máy' : 'Server'} · '
+                      '${detectionBackend?.call() == 'device' ? 'Máy ${AiConfig.deviceModel.replaceAll('.tflite', '')}' : 'Server'} · '
                       '${frame.fps.toStringAsFixed(1)} FPS · '
                       '${frame.latencyMs} ms',
                 );

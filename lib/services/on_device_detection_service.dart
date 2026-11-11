@@ -20,6 +20,13 @@ abstract interface class YoloEngine {
   Future<void> dispose();
 }
 
+/// A model is usable when it knows at least one obstacle class. The custom
+/// model maps all ten of its classes; the COCO model maps only some of its 80,
+/// and the rest are dropped per box, as the server does.
+bool modelLabelsUsable(Object? labels) =>
+    labels is List &&
+    labels.any((label) => canonicalClassName(label.toString()) != null);
+
 class UltralyticsYoloEngine implements YoloEngine {
   final _yolo = YOLO(
     modelPath: AiConfig.deviceModelAsset,
@@ -33,9 +40,7 @@ class UltralyticsYoloEngine implements YoloEngine {
   Future<void> load() async {
     final metadata = await YOLO.inspectModel(AiConfig.deviceModelAsset);
     final labels = metadata['labels'];
-    if (labels is! List ||
-        labels.isEmpty ||
-        labels.any((label) => canonicalClassName(label.toString()) == null)) {
+    if (!modelLabelsUsable(labels)) {
       throw const AiDetectionException('Tên lớp trong mô hình không phù hợp.');
     }
     if (!await _yolo.loadModel()) {

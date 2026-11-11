@@ -35,6 +35,7 @@ mất toàn bộ cảnh báo vật cản.
 | Model | `yolo11n_ft20` xuất LiteRT, `imgsz=640`, `nms=None` | Model train ở 640; cột và cây vốn đã khó bắt, giảm xuống 320 sẽ sót thêm. Ở nhịp 1–2 Hz thì 640 vẫn kịp |
 | Luật vị trí/nguy hiểm | Viết lại bằng Dart, kiểm bằng fixture dùng chung với Python | Hai đường phải cho cùng kết quả với cùng một hộp |
 | Chọn đường | `DETECTION_MODE`: `auto` (mặc định), `device`, `server` | `auto`: model nạp được thì chạy trên máy, không thì dùng server |
+| Chọn model | `DEVICE_MODEL` trong `.env`: `httm_yolo11n_ft20.tflite` (mặc định) hoặc `yolo11n.tflite` (COCO gốc, để đối chiếu) | Cả hai file cùng nằm trong app; đổi model chỉ cần sửa `.env` và build lại |
 | File model | `assets/models/*.tflite`, không đưa vào git | Giữ quy ước trọng số không nằm trong git. Thiếu file thì `auto` tự dùng server |
 
 Cái giá của lựa chọn này: mỗi khung hình vẫn phải chụp và giải mã JPEG, nên nhịp nhận diện

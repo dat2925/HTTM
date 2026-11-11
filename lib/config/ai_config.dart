@@ -26,7 +26,25 @@ class AiConfig {
     };
   }
 
-  static const deviceModelAsset = 'assets/models/httm_yolo11n_ft20.tflite';
+  static const defaultDeviceModel = 'httm_yolo11n_ft20.tflite';
+
+  /// File name inside assets/models/, chosen with DEVICE_MODEL. Like the rest
+  /// of .env it is bundled at build time, so switching models needs a rebuild.
+  static String get deviceModel {
+    const override = String.fromEnvironment('DEVICE_MODEL');
+    final value = override.isNotEmpty
+        ? override
+        : (dotenv.isInitialized ? dotenv.env['DEVICE_MODEL'] : null);
+    return deviceModelFileName(value) ?? defaultDeviceModel;
+  }
+
+  /// Accepts a bare `.tflite` file name only, never a path.
+  static String? deviceModelFileName(String? value) {
+    final name = value?.trim() ?? '';
+    return RegExp(r'^[A-Za-z0-9._-]+\.tflite$').hasMatch(name) ? name : null;
+  }
+
+  static String get deviceModelAsset => 'assets/models/$deviceModel';
   static const deviceCaptureInterval = Duration(milliseconds: 500);
   static const Duration captureInterval = Duration(milliseconds: 900);
   static const Duration requestTimeout = Duration(seconds: 20);
