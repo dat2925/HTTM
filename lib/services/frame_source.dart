@@ -56,10 +56,8 @@ class FrameSource {
     }
     return controller.takePicture().timeout(
       AiConfig.captureTimeout,
-      onTimeout: () => throw CameraException(
-        'captureTimeout',
-        'Camera capture timed out.',
-      ),
+      onTimeout: () =>
+          throw CameraException('captureTimeout', 'Camera capture timed out.'),
     );
   }
 

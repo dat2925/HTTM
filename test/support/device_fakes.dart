@@ -85,7 +85,11 @@ class RecordingTts extends TtsService {
   @override
   Future<void> initialize() async {}
   @override
-  Future<bool> speak(String text, {int priority = 2}) async {
+  Future<bool> speak(
+    String text, {
+    int priority = 2,
+    bool interrupt = false,
+  }) async {
     spoken.add((text, priority));
     return true;
   }

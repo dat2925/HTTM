@@ -78,6 +78,13 @@ void main() {
   });
   test('facing directions wrap correctly through north', () {
     expect(facingInstruction(359, 1), 'Đi thẳng');
+    expect(facingInstruction(0, 25), 'Đi thẳng');
+    expect(facingInstruction(0, 26), 'Chếch sang phải');
+    expect(facingInstruction(0, 334), 'Chếch sang trái');
+    expect(facingInstruction(0, 60), 'Chếch sang phải');
+    expect(facingInstruction(0, 61), 'Quay sang phải');
+    expect(facingInstruction(0, 149), 'Quay sang phải');
+    expect(facingInstruction(0, 150), 'Quay lại');
     expect(facingInstruction(0, 90), 'Quay sang phải');
     expect(facingInstruction(0, 270), 'Quay sang trái');
     expect(facingInstruction(0, 180), 'Quay lại');

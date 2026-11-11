@@ -37,6 +37,39 @@ void main() {
       VoiceCommandKind.stopMonitoring,
     );
   });
+  test('natural destination prefixes preserve place and reject questions', () {
+    for (final prefix in [
+      'tôi muốn đi đến',
+      'tôi muốn đi tới',
+      'tôi muốn đến',
+      'tôi muốn tới',
+      'tôi cần đến',
+      'tôi cần tới',
+      'chỉ đường đến',
+      'chỉ đường tới',
+      'dẫn đường đến',
+      'dẫn đường tới',
+      'đi ra',
+      'ra',
+    ]) {
+      final command = VoiceCommand.parse('$prefix Công viên.');
+      expect(command.kind, VoiceCommandKind.destination, reason: prefix);
+      expect(command.destination, 'Công viên', reason: prefix);
+      for (final question in [
+        '$prefix Công viên?',
+        '$prefix Công viên không.',
+      ]) {
+        expect(
+          VoiceCommand.parse(question).kind,
+          VoiceCommandKind.assistant,
+          reason: question,
+        );
+      }
+    }
+    expect(VoiceCommand.parse('xác nhận').kind, VoiceCommandKind.confirm);
+    expect(VoiceCommand.parse('hủy').kind, VoiceCommandKind.dismiss);
+    expect(VoiceCommand.parse('không').kind, VoiceCommandKind.dismiss);
+  });
   test('QR accepts enrollment only and cannot override backend or include secrets', () {
     expect(
       PairingQr.codeFrom(

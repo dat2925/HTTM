@@ -67,17 +67,31 @@ class VoiceCommand {
       'tính lại đường': VoiceCommandKind.refresh,
     };
     if (commands.containsKey(lower)) return VoiceCommand(commands[lower]!);
+    final isQuestion =
+        text.trimRight().endsWith('?') || RegExp(r'\bkhông$').hasMatch(lower);
     for (final prefix in const [
+      'tôi muốn đi đến',
+      'tôi muốn đi tới',
+      'chỉ đường đến',
+      'chỉ đường tới',
+      'dẫn đường đến',
+      'dẫn đường tới',
+      'tôi muốn đến',
+      'tôi muốn tới',
+      'tôi cần đến',
+      'tôi cần tới',
       'dẫn tôi đến',
       'dẫn tôi tới',
       'đưa tôi đến',
       'đưa tôi tới',
       'đi đến',
       'đi tới',
+      'đi ra',
       'tới',
       'đến',
+      'ra',
     ]) {
-      if (lower.startsWith('$prefix ')) {
+      if (!isQuestion && lower.startsWith('$prefix ')) {
         return VoiceCommand(
           VoiceCommandKind.destination,
           destination: normalized.substring(prefix.length).trim(),

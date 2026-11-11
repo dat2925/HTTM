@@ -242,7 +242,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         ),
                         Text(
                           p.headingDegrees == null
-                              ? 'Hướng chưa rõ: giữ đầu điện thoại về phía trước, tránh gần kim loại.'
+                              ? 'Hướng chưa rõ: cầm nghiêng, đầu điện thoại hướng về phía trước, tránh gần kim loại.'
                               : 'Đầu điện thoại: ${cardinalDirection(p.headingDegrees!)} ${p.headingDegrees!.round()}°'
                                     '${p.targetBearing == null ? '' : ' · Lối đi: ${p.targetBearing!.round()}°'}',
                           style: Theme.of(context).textTheme.bodySmall,
@@ -251,19 +251,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           stream: widget.controller.states,
                           builder: (_, state) {
                             final alert = state.data;
-                            if (alert is SessionAlerting) {
-                              return Text(
-                                alert.statusText,
-                                style: const TextStyle(
-                                  color: Colors.redAccent,
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              );
-                            }
+                            final alertText = alert is SessionAlerting
+                                ? Text(
+                                    alert.statusText,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.redAccent,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  )
+                                : null;
+                            // An obstacle alert must never hide the pending
+                            // destination: the user still has to answer it.
                             if (widget.controller.pendingDestination != null) {
                               return Column(
                                 children: [
+                                  ?alertText,
                                   Text(
                                     widget
                                         .controller
@@ -292,6 +297,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                                 ],
                               );
                             }
+                            if (alertText != null) return alertText;
                             return Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [

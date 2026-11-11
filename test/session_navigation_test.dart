@@ -1,5 +1,8 @@
 import 'dart:async';
 
+// ignore: depend_on_referenced_packages
+import 'package:fake_async/fake_async.dart';
+
 import 'package:camera/camera.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:smart_navigation/controllers/session_controller.dart';
@@ -15,6 +18,8 @@ import 'package:smart_navigation/services/voice_command_router.dart';
 
 import 'assistant_test.dart' show FakeAssistant;
 
+import 'support/device_fakes.dart' as device;
+
 class NoCamera extends FrameSource {
   @override
   Future<void> initialize() async {
@@ -27,7 +32,11 @@ class RecordingTts extends TtsService {
   @override
   Future<void> initialize() async {}
   @override
-  Future<bool> speak(String text, {int priority = 2}) async {
+  Future<bool> speak(
+    String text, {
+    int priority = 2,
+    bool interrupt = false,
+  }) async {
     spoken.add(text);
     return true;
   }
@@ -107,6 +116,61 @@ class FakeRoute extends RouteService {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('route timing uses 8s repeat, 3s gap, 20s urgent and once idle', () {
+    fakeAsync((async) {
+      final route = FakeRoute(), tts = device.RecordingTts();
+      final session = SessionController(
+        routeService: route,
+        ttsService: tts,
+        frameSource: device.FakeCamera()..failOpen = true,
+        assistantService: FakeAssistant(),
+        now: async.getClock(DateTime(2026, 11, 11)).now,
+      );
+      session.initialize();
+      async.flushMicrotasks();
+      void emit(String key, {bool urgent = false, bool once = false}) {
+        route.events.add(
+          RouteInstruction(text: key, key: key, urgent: urgent, once: once),
+        );
+        async.flushMicrotasks();
+      }
+
+      int count(String key) => tts.spoken.where((s) => s.$1 == key).length;
+      emit('straight');
+      async.elapse(const Duration(seconds: 7));
+      emit('straight');
+      expect(count('straight'), 1);
+      async.elapse(const Duration(seconds: 1));
+      expect(count('straight'), 2);
+      async.elapse(const Duration(seconds: 2));
+      emit('left');
+      expect(count('left'), 0);
+      async.elapse(const Duration(seconds: 1));
+      emit('left');
+      expect(count('left'), 1);
+      emit('gps', urgent: true);
+      expect(count('gps'), 1);
+      async.elapse(const Duration(seconds: 19));
+      emit('gps', urgent: true);
+      expect(count('gps'), 1);
+      async.elapse(const Duration(seconds: 1));
+      emit('gps', urgent: true);
+      expect(count('gps'), 2);
+      emit('other', urgent: true);
+      expect(count('other'), 1);
+      emit('gps', urgent: true);
+      expect(count('gps'), 2);
+      async.elapse(const Duration(seconds: 3));
+      emit('idle-ready', once: true);
+      expect(count('idle-ready'), 1);
+      async.elapse(const Duration(seconds: 40));
+      emit('idle-ready', once: true);
+      expect(count('idle-ready'), 1);
+      session.dispose();
+      async.flushMicrotasks();
+    });
+  });
+
   test('arrival is spoken once and resets for a new journey', () async {
     final route = FakeRoute(), tts = RecordingTts();
     final session = SessionController(
