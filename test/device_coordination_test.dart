@@ -350,6 +350,44 @@ void main() {
   );
 
   test(
+    'obstacle detection restarts after resume when the camera reopens slowly',
+    () => fakeAsync((async) {
+      final camera = FakeCamera(), detector = FakeDetector();
+      final session = SessionController(
+        frameSource: camera,
+        detectionService: detector,
+        ttsService: RecordingTts(),
+        routeService: FakeRoute(),
+        assistantService: FakeAssistant(),
+      );
+      session.initialize();
+      async.flushMicrotasks();
+      session.start();
+      async.flushMicrotasks();
+      expect(session.isRunning, isTrue);
+
+      session.pauseNavigation();
+      async.flushMicrotasks();
+      expect(session.isRunning, isFalse);
+
+      // Same sequence as HomeScreen._resume(): resume, then start.
+      camera.openGate = Completer<void>();
+      var started = false;
+      session.resumeNavigation().then((_) async {
+        started = await session.start();
+      });
+      async.elapse(const Duration(milliseconds: 300));
+      expect(started, isFalse);
+      camera.openGate!.complete();
+      async.flushMicrotasks();
+      expect(started, isTrue);
+      expect(session.isRunning, isTrue);
+      session.dispose();
+      async.flushMicrotasks();
+    }),
+  );
+
+  test(
     'hung camera capture and init time out and resumeNavigation restarts GPS immediately',
     () => fakeAsync((async) {
       final fCamera = FakeCamera(),
@@ -393,13 +431,14 @@ void main() {
       fSession.resumeNavigation().then((_) => resumeDone = true);
       async.flushMicrotasks();
       expect(fRoute.started, 2); // GPS restarted before camera pause finished!
-      expect(resumeDone, isTrue);
+      expect(resumeDone, isFalse); // ...but resume still waits for the camera.
 
-      // Let the hung capture time out so pause & reopen finish in the background.
+      // Let the hung capture time out so pause & reopen finish.
       fCamera.captureGate = null;
       async.elapse(AiConfig.captureTimeout);
       expect(pauseDone, isTrue);
       expect(fCamera.ready, isTrue);
+      expect(resumeDone, isTrue);
 
       // 3. Camera init timeout (10s) sets cameraError without blocking GPS.
       fSession.pauseNavigation();

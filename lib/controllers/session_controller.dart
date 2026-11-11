@@ -368,10 +368,14 @@ class SessionController {
     final lifecycle = ++_navigationLifecycle;
     if (_disposed) return;
     _navigationPaused = false;
-    final routeStarted = _routeService.start();
-    final cameraRestored = _restoreCameraAfterPause(lifecycle);
-    await Future.wait<void>([routeStarted, _ensureTts()]);
-    await Future.any<void>([cameraRestored, _yieldMicrotasks()]);
+    // GPS guidance restarts at once, even if the camera is still closing.
+    // The returned future still waits for the camera: callers such as
+    // HomeScreen._resume() call start() next, which needs a ready camera.
+    await Future.wait<void>([
+      _routeService.start(),
+      _ensureTts(),
+      _restoreCameraAfterPause(lifecycle),
+    ]);
   }
 
   Future<void> _restoreCameraAfterPause(int lifecycle) async {
@@ -380,12 +384,6 @@ class SessionController {
       return;
     }
     await _openCamera();
-  }
-
-  Future<void> _yieldMicrotasks() async {
-    for (var i = 0; i < 8; i++) {
-      await Future<void>.value();
-    }
   }
 
   Future<void> pauseNavigation() {
