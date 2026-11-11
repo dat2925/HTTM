@@ -13,7 +13,7 @@ Routing: `/route?from_lat=&from_lng=&to_lat=&to_lng=`. Returns `profile=pedestri
 
 Geocoding: `/geocode?q=&near_lat=&near_lng=`; `/reverse?lat=&lng=`. Nominatim requests share a per-process 1.1-second interval and 5-minute bounded cache. Run one worker; multi-worker deployment needs shared throttling/cache.
 
-Detection: `/detect` multipart JPEG; model selected with `YOLO_MODEL`, confidence with `YOLO_CONFIDENCE`. Proximity remains a bounding-box heuristic. To use the custom trained 10-class model (local weights, not committed to git), set `YOLO_MODEL=httm_yolo11s_10ep.pt` (classes: `Bang hieu`, `Cay coi`, `Cot`, `Den giao thong`, `Nguoi`, `O ga`, `Thung rac`, `Xe dap`, `Xe hoi`, `Xe may`).
+Detection: `/detect` multipart JPEG; model selected with `YOLO_MODEL`, confidence with `YOLO_CONFIDENCE`. Proximity remains a bounding-box heuristic. To use the custom trained 10-class model (local weights, not committed to git), set `YOLO_MODEL=httm_yolo11s_v2.pt` in the environment or `ai_server/.env` (v2 = fine-tuned 40 epochs from the 10-epoch baseline; test mAP50 0.873, mAP50-95 0.643) (classes: `Bang hieu`, `Cay coi`, `Cot`, `Den giao thong`, `Nguoi`, `O ga`, `Thung rac`, `Xe dap`, `Xe hoi`, `Xe may`).
 
 Tests: `.venv\Scripts\python.exe -X utf8 -B -m unittest discover -p "test_*.py" -v`.
 

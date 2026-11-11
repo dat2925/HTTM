@@ -12,6 +12,7 @@ from detector import (
     YoloObstacleDetector,
     canonical_class_name,
     danger_for,
+    detector_setting,
     normalize_class_name,
     position_for,
     resolve_model_path,
@@ -199,19 +200,31 @@ class HeuristicTests(unittest.TestCase):
             finally:
                 os.chdir(cwd)
 
-    def test_real_httm_model_all_classes_map(self) -> None:
-        model_file = SERVER_DIR / "httm_yolo11s_10ep.pt"
-        if not model_file.is_file():
-            self.skipTest("httm_yolo11s_10ep.pt not present")
-        with patch.dict(os.environ, {"YOLO_MODEL": "httm_yolo11s_10ep.pt"}):
-            det = YoloObstacleDetector()
-            model = det._get_model()
-        raw_names = list(model.names.values()) if isinstance(model.names, dict) else list(model.names)
-        self.assertEqual(len(raw_names), 10)
-        for raw_name in raw_names:
-            mapped = canonical_class_name(str(raw_name))
-            self.assertIsNotNone(mapped, f"Unmapped class in httm_yolo11s_10ep.pt: {raw_name!r}")
-            self.assertIn(mapped, OBSTACLE_CLASSES)
+    def test_setting_reads_env_file_but_process_env_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            Path(temp_dir, ".env").write_text("YOLO_MODEL=from_file.pt\n", encoding="utf-8")
+            with patch("detector.SERVER_DIR", Path(temp_dir)), \
+                    patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("YOLO_MODEL", None)
+                self.assertEqual(detector_setting("YOLO_MODEL", "yolo11n.pt"), "from_file.pt")
+                self.assertEqual(detector_setting("YOLO_CONFIDENCE", "0.35"), "0.35")
+                os.environ["YOLO_MODEL"] = "from_env.pt"
+                self.assertEqual(detector_setting("YOLO_MODEL", "yolo11n.pt"), "from_env.pt")
+
+    def test_real_httm_models_all_classes_map(self) -> None:
+        model_files = sorted(SERVER_DIR.glob("httm_yolo11*.pt"))
+        if not model_files:
+            self.skipTest("no local httm_yolo11*.pt weights")
+        for model_file in model_files:
+            with self.subTest(model=model_file.name), \
+                    patch.dict(os.environ, {"YOLO_MODEL": model_file.name}):
+                model = YoloObstacleDetector()._get_model()
+                raw_names = list(model.names.values()) if isinstance(model.names, dict) else list(model.names)
+                self.assertEqual(len(raw_names), 10)
+                for raw_name in raw_names:
+                    mapped = canonical_class_name(str(raw_name))
+                    self.assertIsNotNone(mapped, f"Unmapped class in {model_file.name}: {raw_name!r}")
+                    self.assertIn(mapped, OBSTACLE_CLASSES)
 
 
 if __name__ == "__main__":

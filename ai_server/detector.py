@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from dotenv import dotenv_values
 from PIL import Image
 
 
@@ -93,6 +94,20 @@ def canonical_class_name(raw_name: str) -> str | None:
     return None
 
 
+def detector_setting(key: str, default: str) -> str:
+    """Process environment first, then ai_server/.env, like assistant_config."""
+    value = os.getenv(key)
+    if value:
+        return value
+    env_file = SERVER_DIR / ".env"
+    if env_file.is_file():
+        try:
+            value = dotenv_values(env_file, interpolate=False).get(key)
+        except OSError:
+            value = None
+    return value or default
+
+
 def resolve_model_path(model_name: str) -> str:
     candidate = Path(model_name)
     if not candidate.is_absolute():
@@ -142,8 +157,8 @@ class YoloObstacleDetector:
         self._logged_model_id: int | None = None
         self._model_lock = threading.Lock()
         self._inference_lock = threading.Lock()
-        self.model_name = os.getenv("YOLO_MODEL", "yolo11n.pt")
-        self.confidence = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
+        self.model_name = detector_setting("YOLO_MODEL", "yolo11n.pt")
+        self.confidence = float(detector_setting("YOLO_CONFIDENCE", "0.35"))
 
     def _log_model_classes(self, names: Any) -> None:
         raw_names = list(names.values()) if isinstance(names, dict) else list(names or [])
