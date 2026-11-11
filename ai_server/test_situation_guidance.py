@@ -95,6 +95,34 @@ class GuidanceTests(unittest.TestCase):
             self.assertEqual(set(node['required']), set(node['properties']))
             self.assertFalse(node['additionalProperties'])
 
+    def test_httm_canonical_classes_have_vietnamese_names_and_categories(self):
+        from assistant_guidance import NAMES, situation_context
+        now = datetime.now(timezone.utc)
+        context = request().context
+        context.yolo_updated_at = now
+        context.obstacles = [
+            Obstacle(class_name='pole', position='center', danger='medium', confidence=0.8),
+            Obstacle(class_name='tree', position='left', danger='low', confidence=0.8),
+            Obstacle(class_name='pothole', position='center', danger='high', confidence=0.9),
+            Obstacle(class_name='trash_bin', position='right', danger='low', confidence=0.7),
+            Obstacle(class_name='signboard', position='right', danger='low', confidence=0.7),
+            Obstacle(class_name='traffic_light', position='center', danger='low', confidence=0.8),
+        ]
+        self.assertEqual(NAMES['pole'], 'cột')
+        self.assertEqual(NAMES['tree'], 'cây')
+        self.assertEqual(NAMES['pothole'], 'ổ gà')
+        self.assertEqual(NAMES['trash_bin'], 'thùng rác')
+        self.assertEqual(NAMES['signboard'], 'bảng hiệu')
+        self.assertEqual(NAMES['traffic_light'], 'đèn giao thông')
+        situation = situation_context(context, False, now)
+        by_class = {d['class_name']: d['category'] for d in situation['detections']}
+        self.assertEqual(by_class['pole'], 'obstacle')
+        self.assertEqual(by_class['tree'], 'obstacle')
+        self.assertEqual(by_class['pothole'], 'obstacle')
+        self.assertEqual(by_class['trash_bin'], 'obstacle')
+        self.assertEqual(by_class['signboard'], 'obstacle')
+        self.assertEqual(by_class['traffic_light'], 'other')
+
 
 class SituationServiceTests(unittest.IsolatedAsyncioTestCase, Fixture):
     def setUp(self): self.setup()

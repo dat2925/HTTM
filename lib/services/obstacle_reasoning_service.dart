@@ -16,7 +16,15 @@ class ObstacleReasoningService {
   static String category(String name) => switch (name) {
     'person' => 'person',
     'bicycle' || 'motorcycle' || 'car' || 'bus' || 'truck' => 'vehicle',
-    'chair' || 'bench' || 'backpack' || 'suitcase' => 'obstacle',
+    'chair' ||
+    'bench' ||
+    'backpack' ||
+    'suitcase' ||
+    'pole' ||
+    'tree' ||
+    'pothole' ||
+    'trash_bin' ||
+    'signboard' => 'obstacle',
     _ => 'other',
   };
 
@@ -51,6 +59,12 @@ class ObstacleReasoningService {
     'dog': 'chó',
     'backpack': 'ba lô',
     'suitcase': 'va li',
+    'pole': 'cột',
+    'tree': 'cây',
+    'pothole': 'ổ gà',
+    'trash_bin': 'thùng rác',
+    'signboard': 'bảng hiệu',
+    'traffic_light': 'đèn giao thông',
   };
 
   ObstacleWarning? selectWarning(List<DetectedObject> objects) {

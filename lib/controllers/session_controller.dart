@@ -111,6 +111,9 @@ class SessionController {
   DateTime? _lastRouteSpokenAt;
   DateTime? _obstacleUntil;
   Timer? _routeSpeechTimer;
+  Timer? _detectorRetryTimer;
+  bool _retryingDetector = false;
+  Timer? _destinationConfirmTimer;
   int _destinationRequest = 0;
   String? cameraError;
   Placemark? _pendingDestination;
@@ -252,7 +255,13 @@ class SessionController {
             !_navigationPaused &&
             !_cameraBorrowed &&
             !_frameSource.isReady) {
-          await _frameSource.initialize();
+          await _frameSource.initialize().timeout(
+            AiConfig.cameraInitTimeout,
+            onTimeout: () => throw CameraException(
+              'cameraInitTimeout',
+              'Camera initialization timed out.',
+            ),
+          );
         }
       });
       if (!_disposed && !_navigationPaused && !_cameraBorrowed) {
@@ -267,6 +276,8 @@ class SessionController {
     final urgent = _pendingRouteSpeech.values.where((event) => event.urgent);
     final instruction = urgent.isNotEmpty
         ? urgent.first
+        : (_pendingDestination != null && (_lastRoute?.urgent ?? false))
+        ? _lastRoute
         : _pendingRouteSpeech.isNotEmpty
         ? _pendingRouteSpeech.values.first
         : _lastRoute;
@@ -275,7 +286,7 @@ class SessionController {
         _routeSpeaking ||
         instruction == null ||
         _isListening ||
-        _pendingDestination != null ||
+        (_pendingDestination != null && !instruction.urgent) ||
         _navigationPaused ||
         routeSnapshot.status == NavigationStatus.paused ||
         (_obstacleUntil != null && now.isBefore(_obstacleUntil!))) {
@@ -318,26 +329,61 @@ class SessionController {
   Future<void> repeatInstruction() => _speakRoute(force: true);
   Future<void> refreshRoute() => _routeService.refresh();
   Future<void> clearJourney() => _routeService.clearJourney();
+  void _clearPendingDestination() {
+    _destinationConfirmTimer?.cancel();
+    _destinationConfirmTimer = null;
+    _pendingDestination = null;
+  }
+
+  void _setPendingDestination(Placemark place) {
+    _clearPendingDestination();
+    _pendingDestination = place;
+    _destinationConfirmTimer = Timer(AiConfig.destinationConfirmTimeout, () {
+      _destinationConfirmTimer = null;
+      // Every utterance bumps _destinationRequest, so compare the pending
+      // place itself: an unrelated command must not keep it alive forever.
+      if (_disposed ||
+          _navigationPaused ||
+          !identical(_pendingDestination, place)) {
+        return;
+      }
+      _pendingDestination = null;
+      ++_destinationRequest;
+      _stateController.add(SessionRunning(statusText: routeSnapshot.message));
+      unawaited(_speak('Đã hủy chọn điểm đến vì không có xác nhận.'));
+    });
+  }
+
   void cancelDestination() {
     _pendingRouteSpeech.clear();
     _spokenRouteEvents.clear();
     _lastRoute = null;
     assistant.invalidate();
     ++_destinationRequest;
-    _pendingDestination = null;
+    _clearPendingDestination();
     _routeService.cancelDestination();
   }
 
   Future<void> resumeNavigation() async {
     final lifecycle = ++_navigationLifecycle;
-    await _pauseWork;
-    if (_disposed || lifecycle != _navigationLifecycle) return;
+    if (_disposed) return;
     _navigationPaused = false;
-    unawaited(_routeService.start());
+    // GPS guidance restarts at once, even if the camera is still closing.
+    // The returned future still waits for the camera: callers such as
+    // HomeScreen._resume() call start() next, which needs a ready camera.
     await Future.wait<void>([
-      if (!_cameraBorrowed) _openCamera(),
+      _routeService.start(),
       _ensureTts(),
+      _restoreCameraAfterPause(lifecycle),
     ]);
+  }
+
+  Future<void> _restoreCameraAfterPause(int lifecycle) async {
+    await _pauseWork;
+    if (_disposed || lifecycle != _navigationLifecycle || _cameraBorrowed) {
+      return;
+    }
+    await _openCamera();
   }
 
   Future<void> pauseNavigation() {
@@ -347,6 +393,7 @@ class SessionController {
     assistant.invalidate();
     _navigationPaused = true;
     ++_destinationRequest;
+    _clearPendingDestination();
     _invalidateVoice();
     stop();
     _routeService.stop();
@@ -375,7 +422,7 @@ class SessionController {
   Future<bool> navigateTo(Placemark place) async {
     assistant.invalidate();
     ++_destinationRequest;
-    _pendingDestination = null;
+    _clearPendingDestination();
     _lastRouteKey = null;
     _lastRouteSpokenAt = null;
     _pendingRouteSpeech.clear();
@@ -389,11 +436,12 @@ class SessionController {
 
   Future<void> confirmPendingDestination() async {
     final place = _pendingDestination;
+    _clearPendingDestination();
     if (place != null) await navigateTo(place);
   }
 
   void cancelPendingDestination() {
-    _pendingDestination = null;
+    _clearPendingDestination();
     ++_destinationRequest;
     _stateController.add(SessionRunning(statusText: routeSnapshot.message));
   }
@@ -445,6 +493,8 @@ class SessionController {
         !_frameSource.isReady) {
       return false;
     }
+    _detectorRetryTimer?.cancel();
+    _detectorRetryTimer = null;
     final healthy = await _detectionService.isHealthy();
     if (_disposed ||
         _cameraBorrowed ||
@@ -458,8 +508,20 @@ class SessionController {
       _stateController.add(
         const SessionRunning(statusText: 'Không thể kết nối AI Server.'),
       );
+      final firstFailure = !_retryingDetector;
+      _retryingDetector = true;
+      _scheduleDetectorRetry(epoch);
+      if (firstFailure) {
+        await _speak(
+          'Cảnh báo vật cản đang tắt vì không kết nối được AI Server. Đang thử lại.',
+        );
+      }
       return false;
     }
+    final recovered = _retryingDetector;
+    _retryingDetector = false;
+    _detectorRetryTimer?.cancel();
+    _detectorRetryTimer = null;
     _running = true;
     cameraError = null;
     _stateController.add(const SessionRunning(statusText: 'AI đang chạy'));
@@ -468,11 +530,32 @@ class SessionController {
       (_) => _captureAndDetect(),
     );
     unawaited(_captureAndDetect());
+    if (recovered) {
+      await _speak('Cảnh báo vật cản đã hoạt động lại.');
+    }
     return true;
+  }
+
+  void _scheduleDetectorRetry(int epoch) {
+    _detectorRetryTimer?.cancel();
+    _detectorRetryTimer = Timer(AiConfig.detectorRetryInterval, () {
+      _detectorRetryTimer = null;
+      if (_disposed ||
+          _cameraBorrowed ||
+          _navigationPaused ||
+          _running ||
+          epoch != _perceptionEpoch) {
+        return;
+      }
+      unawaited(start());
+    });
   }
 
   void stop() {
     ++_perceptionEpoch;
+    _detectorRetryTimer?.cancel();
+    _detectorRetryTimer = null;
+    _retryingDetector = false;
     _captureTimer?.cancel();
     _captureTimer = null;
     _running = false;
@@ -499,7 +582,15 @@ class SessionController {
     final startedAt = DateTime.now();
     XFile? image;
     try {
-      image = await _useCamera<XFile>(_frameSource.captureFrame);
+      image = await _useCamera<XFile>(
+        () => _frameSource.captureFrame().timeout(
+          AiConfig.captureTimeout,
+          onTimeout: () => throw CameraException(
+            'captureTimeout',
+            'Camera capture timed out.',
+          ),
+        ),
+      );
       final capturedAt = DateTime.now();
       try {
         final jpeg = await image.readAsBytes();
@@ -513,7 +604,14 @@ class SessionController {
         _jpegAt = null;
       }
       cameraIdle.complete();
-      final result = await _detectionService.detect(image);
+      final result = await _detectionService
+          .detect(image)
+          .timeout(
+            AiConfig.detectTimeout,
+            onTimeout: () => throw const AiDetectionException(
+              'AI Server phản hồi quá thời gian chờ.',
+            ),
+          );
       if (_disposed || !_running || epoch != _perceptionEpoch) return;
       if (!SituationEngine.fresh(
         capturedAt,
@@ -570,7 +668,7 @@ class SessionController {
     } finally {
       if (!cameraIdle.isCompleted) cameraIdle.complete();
       _requestInProgress = false;
-      if (image != null) {
+      if (image != null && image.path.isNotEmpty) {
         try {
           await File(image.path).delete();
         } catch (_) {
@@ -841,14 +939,14 @@ class SessionController {
         return;
       case VoiceCommandKind.assistant:
         // Avoid two simultaneous confirmations for different destinations.
-        _pendingDestination = null;
+        _clearPendingDestination();
         await assistant.ask(
           text,
           includeImage: includeImage || command.includeImage,
         );
         return;
       case VoiceCommandKind.destination:
-        _pendingDestination = null;
+        _clearPendingDestination();
     }
     final destinationQuery = command.destination!;
 
@@ -864,7 +962,7 @@ class SessionController {
         return;
       }
       assistant.invalidate();
-      _pendingDestination = place;
+      _setPendingDestination(place);
       final confirmation =
           'Địa điểm tìm được: ${place.displayName}. Nói “xác nhận” để dẫn đường, hoặc “hủy”.';
       _stateController.add(SessionRunning(statusText: confirmation));
@@ -938,7 +1036,15 @@ class SessionController {
     final cameraIdle = _cameraIdle = Completer<void>();
     XFile? image;
     try {
-      image = await _useCamera<XFile>(_frameSource.captureFrame);
+      image = await _useCamera<XFile>(
+        () => _frameSource.captureFrame().timeout(
+          AiConfig.captureTimeout,
+          onTimeout: () => throw CameraException(
+            'captureTimeout',
+            'Camera capture timed out.',
+          ),
+        ),
+      );
       final capturedAt = DateTime.now();
       final bytes = await image.readAsBytes();
       _latestJpeg = bytes;
@@ -947,7 +1053,7 @@ class SessionController {
     } finally {
       cameraIdle.complete();
       _requestInProgress = false;
-      if (image != null) {
+      if (image != null && image.path.isNotEmpty) {
         try {
           await File(image.path).delete();
         } catch (_) {}
@@ -976,6 +1082,8 @@ class SessionController {
     _invalidateVoice();
     stop();
     ++_destinationRequest;
+    _clearPendingDestination();
+    _detectorRetryTimer?.cancel();
     _routeSpeechTimer?.cancel();
     _captureTimer?.cancel();
     await assistant.dispose();

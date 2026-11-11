@@ -6,6 +6,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:smart_navigation/config/ai_config.dart';
 import 'package:smart_navigation/services/ai_detection_service.dart';
 
 class DetectionClient extends http.BaseClient {
@@ -173,4 +174,34 @@ void main() {
       ),
     );
   });
+
+  test(
+    'detect uses detectTimeout while isHealthy keeps requestTimeout',
+    () async {
+      expect(AiConfig.detectTimeout, const Duration(seconds: 4));
+      expect(AiConfig.requestTimeout, const Duration(seconds: 20));
+      final service = AiDetectionService(
+        requestTimeout: const Duration(milliseconds: 400),
+        detectTimeout: const Duration(milliseconds: 60),
+        client: DetectionClient((request) async {
+          if (request.url.path.endsWith('/health')) {
+            await Future<void>.delayed(const Duration(milliseconds: 120));
+            return http.StreamedResponse(
+              Stream.value(utf8.encode('{"status":"ok"}')),
+              200,
+            );
+          }
+          final multipart = request as http.AbortableMultipartRequest;
+          await multipart.abortTrigger;
+          throw http.RequestAbortedException(request.url);
+        }),
+      );
+      addTearDown(service.dispose);
+      expect(await service.isHealthy(), isTrue);
+      await expectLater(
+        service.detect(image),
+        throwsA(isA<AiDetectionException>()),
+      );
+    },
+  );
 }
