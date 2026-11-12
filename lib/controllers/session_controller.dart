@@ -12,6 +12,8 @@ import '../models/placemark.dart';
 import '../models/geo_point.dart';
 import '../models/session_state.dart';
 import '../services/ai_detection_service.dart';
+import '../services/detection_backend.dart';
+import '../services/on_device_detection_service.dart';
 import '../services/frame_source.dart';
 import '../services/geocoding_service.dart';
 import '../services/obstacle_reasoning_service.dart';
@@ -29,7 +31,7 @@ import 'assistant_controller.dart';
 class SessionController {
   SessionController({
     FrameSource? frameSource,
-    AiDetectionService? detectionService,
+    ObstacleDetector? detectionService,
     ObstacleReasoningService? reasoningService,
     RouteService? routeService,
     VoiceService? voiceService,
@@ -38,7 +40,13 @@ class SessionController {
     AiAssistantService? assistantService,
     DateTime Function()? now,
   }) : _frameSource = frameSource ?? FrameSource(),
-       _detectionService = detectionService ?? AiDetectionService(),
+       _detectionService =
+           detectionService ??
+           HybridDetectionService(
+             server: AiDetectionService(),
+             device: OnDeviceDetector(),
+             mode: AiConfig.detectionMode,
+           ),
        _reasoningService = reasoningService ?? ObstacleReasoningService(),
        _routeService = routeService ?? PedestrianRouteService(),
        _voiceService = voiceService ?? VoiceService(),
@@ -49,7 +57,8 @@ class SessionController {
 
   final DateTime Function() _now;
   final FrameSource _frameSource;
-  final AiDetectionService _detectionService;
+  final ObstacleDetector _detectionService;
+  String get detectionBackend => _detectionService.backend;
   final ObstacleReasoningService _reasoningService;
   final RouteService _routeService;
   final VoiceService _voiceService;
@@ -567,16 +576,24 @@ class SessionController {
       return false;
     }
     if (!healthy) {
-      cameraError = 'Không kết nối được AI vật cản. Kiểm tra AI Server.';
+      cameraError = detectionBackend == 'device'
+          ? 'Không thể nạp nhận diện vật cản trên máy.'
+          : 'Không kết nối được AI vật cản. Kiểm tra AI Server.';
       _stateController.add(
-        const SessionRunning(statusText: 'Không thể kết nối AI Server.'),
+        SessionRunning(
+          statusText: detectionBackend == 'device'
+              ? cameraError!
+              : 'Không thể kết nối AI Server.',
+        ),
       );
       final firstFailure = !_retryingDetector;
       _retryingDetector = true;
       _scheduleDetectorRetry(epoch);
       if (firstFailure) {
         await _speak(
-          'Cảnh báo vật cản đang tắt vì không kết nối được AI Server. Đang thử lại.',
+          detectionBackend == 'device'
+              ? 'Cảnh báo vật cản trên máy đang tắt. Đang thử lại.'
+              : 'Cảnh báo vật cản đang tắt vì không kết nối được AI Server. Đang thử lại.',
         );
       }
       return false;
@@ -589,7 +606,9 @@ class SessionController {
     cameraError = null;
     _stateController.add(const SessionRunning(statusText: 'AI đang chạy'));
     _captureTimer = Timer.periodic(
-      AiConfig.captureInterval,
+      detectionBackend == 'device'
+          ? AiConfig.deviceCaptureInterval
+          : AiConfig.captureInterval,
       (_) => _captureAndDetect(),
     );
     unawaited(_captureAndDetect());
@@ -671,8 +690,10 @@ class SessionController {
           .detect(image)
           .timeout(
             AiConfig.detectTimeout,
-            onTimeout: () => throw const AiDetectionException(
-              'AI Server phản hồi quá thời gian chờ.',
+            onTimeout: () => throw AiDetectionException(
+              detectionBackend == 'device'
+                  ? 'Nhận diện trên máy quá thời gian chờ.'
+                  : 'AI Server phản hồi quá thời gian chờ.',
             ),
           );
       if (_disposed || !_running || epoch != _perceptionEpoch) return;
@@ -1179,7 +1200,12 @@ class SessionController {
     await _routeService.dispose();
     await _finishVoice();
     await _useCamera(_frameSource.dispose);
-    _detectionService.dispose();
+    final detector = _detectionService;
+    if (detector is HybridDetectionService) {
+      await detector.dispose();
+    } else if (detector is AiDetectionService) {
+      detector.dispose();
+    }
     _voiceService.dispose();
     _geocodingService.dispose();
     await _ttsService.dispose();

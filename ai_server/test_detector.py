@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -61,6 +62,26 @@ class FakeModel:
 
 
 class HeuristicTests(unittest.TestCase):
+    def test_shared_rules_fixture(self) -> None:
+        fixture = Path(__file__).resolve().parent.parent / "test" / "fixtures" / "detection_rules_parity.json"
+        cases = json.loads(fixture.read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(cases), 20)
+        for index, case in enumerate(cases):
+            with self.subTest(index=index, raw=case["class_name_raw"]):
+                name = canonical_class_name(case["class_name_raw"])
+                expected = case["expected"]
+                if expected is None:
+                    self.assertIsNone(name)
+                    continue
+                x1, y1, x2, y2 = case["box"]
+                position = position_for((x1 + x2) / 2, 1)
+                area = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+                self.assertEqual({
+                    "class_name": name,
+                    "position": position,
+                    "danger": danger_for(area, name, position, y2),
+                }, expected)
+
     def test_position_boundaries(self) -> None:
         self.assertEqual(position_for(32, 100), "left")
         self.assertEqual(position_for(33, 100), "center")

@@ -1,0 +1,382 @@
+[
+  {
+    "class_name_raw": "Bang hieu",
+    "box": [
+      0,
+      0.1,
+      0.2,
+      0.2
+    ],
+    "expected": {
+      "class_name": "signboard",
+      "position": "left",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "Cay coi",
+    "box": [
+      0.4,
+      0.1,
+      0.6,
+      0.6
+    ],
+    "expected": {
+      "class_name": "tree",
+      "position": "center",
+      "danger": "medium"
+    }
+  },
+  {
+    "class_name_raw": "Cot",
+    "box": [
+      0.7,
+      0,
+      1,
+      0.8
+    ],
+    "expected": {
+      "class_name": "pole",
+      "position": "right",
+      "danger": "high"
+    }
+  },
+  {
+    "class_name_raw": "Den giao thong",
+    "box": [
+      0,
+      0.1,
+      0.2,
+      0.2
+    ],
+    "expected": {
+      "class_name": "traffic_light",
+      "position": "left",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "Nguoi",
+    "box": [
+      0.4,
+      0.1,
+      0.6,
+      0.6
+    ],
+    "expected": {
+      "class_name": "person",
+      "position": "center",
+      "danger": "medium"
+    }
+  },
+  {
+    "class_name_raw": "O ga",
+    "box": [
+      0.7,
+      0,
+      1,
+      0.8
+    ],
+    "expected": {
+      "class_name": "pothole",
+      "position": "right",
+      "danger": "high"
+    }
+  },
+  {
+    "class_name_raw": "Thung rac",
+    "box": [
+      0,
+      0.1,
+      0.2,
+      0.2
+    ],
+    "expected": {
+      "class_name": "trash_bin",
+      "position": "left",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "Xe dap",
+    "box": [
+      0.4,
+      0.1,
+      0.6,
+      0.6
+    ],
+    "expected": {
+      "class_name": "bicycle",
+      "position": "center",
+      "danger": "medium"
+    }
+  },
+  {
+    "class_name_raw": "Xe hoi",
+    "box": [
+      0.7,
+      0,
+      1,
+      0.8
+    ],
+    "expected": {
+      "class_name": "car",
+      "position": "right",
+      "danger": "high"
+    }
+  },
+  {
+    "class_name_raw": "Xe may",
+    "box": [
+      0,
+      0.1,
+      0.2,
+      0.2
+    ],
+    "expected": {
+      "class_name": "motorcycle",
+      "position": "left",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "  ĐÈN_giao   thông ",
+    "box": [
+      0.3,
+      0.1,
+      0.36,
+      0.2
+    ],
+    "expected": {
+      "class_name": "traffic_light",
+      "position": "left",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "Ổ_gà",
+    "box": [
+      0.45,
+      0.56,
+      0.55,
+      0.66
+    ],
+    "expected": {
+      "class_name": "pothole",
+      "position": "center",
+      "danger": "high"
+    }
+  },
+  {
+    "class_name_raw": "O ga",
+    "box": [
+      0.45,
+      0.55,
+      0.55,
+      0.65
+    ],
+    "expected": {
+      "class_name": "pothole",
+      "position": "center",
+      "danger": "medium"
+    }
+  },
+  {
+    "class_name_raw": "O ga",
+    "box": [
+      0.05,
+      0.7,
+      0.15,
+      0.8
+    ],
+    "expected": {
+      "class_name": "pothole",
+      "position": "left",
+      "danger": "medium"
+    }
+  },
+  {
+    "class_name_raw": "O ga",
+    "box": [
+      0.7,
+      0.7,
+      0.8,
+      0.8
+    ],
+    "expected": {
+      "class_name": "pothole",
+      "position": "right",
+      "danger": "medium"
+    }
+  },
+  {
+    "class_name_raw": "O ga",
+    "box": [
+      0.3,
+      0.2,
+      0.6,
+      0.8
+    ],
+    "expected": {
+      "class_name": "pothole",
+      "position": "center",
+      "danger": "high"
+    }
+  },
+  {
+    "class_name_raw": "Cot",
+    "box": [
+      0.45,
+      0.7,
+      0.55,
+      0.8
+    ],
+    "expected": {
+      "class_name": "pole",
+      "position": "center",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "Nguoi",
+    "box": [
+      0.63,
+      0,
+      0.69,
+      0.2
+    ],
+    "expected": {
+      "class_name": "person",
+      "position": "center",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "Nguoi",
+    "box": [
+      0,
+      0,
+      0.25,
+      0.2
+    ],
+    "expected": {
+      "class_name": "person",
+      "position": "left",
+      "danger": "medium"
+    }
+  },
+  {
+    "class_name_raw": "Nguoi",
+    "box": [
+      0,
+      0,
+      0.5,
+      0.3
+    ],
+    "expected": {
+      "class_name": "person",
+      "position": "left",
+      "danger": "high"
+    }
+  },
+  {
+    "class_name_raw": "traffic_light",
+    "box": [
+      0,
+      0,
+      0.2,
+      0.2
+    ],
+    "expected": null
+  },
+  {
+    "class_name_raw": "traffic light",
+    "box": [
+      0,
+      0,
+      0.2,
+      0.2
+    ],
+    "expected": null
+  },
+  {
+    "class_name_raw": "airplane",
+    "box": [
+      0.4,
+      0.4,
+      0.6,
+      0.6
+    ],
+    "expected": null
+  },
+  {
+    "class_name_raw": "N​GƯỜI",
+    "box": [
+      0.4,
+      0.1,
+      0.6,
+      0.2
+    ],
+    "expected": {
+      "class_name": "person",
+      "position": "center",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "XE__MÁY",
+    "box": [
+      0.8,
+      0.1,
+      0.9,
+      0.2
+    ],
+    "expected": {
+      "class_name": "motorcycle",
+      "position": "right",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "thung_rac",
+    "box": [
+      0.8,
+      0.1,
+      0.9,
+      0.2
+    ],
+    "expected": {
+      "class_name": "trash_bin",
+      "position": "right",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "Nguoi",
+    "box": [
+      0.5,
+      0.5,
+      0.4,
+      0.4
+    ],
+    "expected": {
+      "class_name": "person",
+      "position": "center",
+      "danger": "low"
+    }
+  },
+  {
+    "class_name_raw": "O ga",
+    "box": [
+      0.3,
+      0,
+      0.36,
+      0.66
+    ],
+    "expected": {
+      "class_name": "pothole",
+      "position": "left",
+      "danger": "medium"
+    }
+  }
+]

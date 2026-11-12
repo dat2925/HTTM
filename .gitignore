@@ -58,3 +58,4 @@ app.*.map.json
 **/.env
 ai_server/.assistant-state/
 **/.env.*.local
+assets/models/*.tflite

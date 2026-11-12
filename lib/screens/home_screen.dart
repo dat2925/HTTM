@@ -211,6 +211,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           : PerceptionPreview(
                               controller: widget.controller.cameraController,
                               frames: widget.controller.frames,
+                              detectionBackend: () =>
+                                  widget.controller.detectionBackend,
                             )
                     : NavigationMap(
                         progress: p,
