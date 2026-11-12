@@ -11,11 +11,13 @@ class PairingQrTests(unittest.TestCase):
     def test_payload_contains_only_enrollment_credential(self):
         values = {"ASSISTANT_PAIRING_CODE": "demo-code-123456",
                   "OPENAI_API_KEY": "dummy-provider-secret",
+                  "GEMINI_API_KEY": "dummy-gemini-secret",
                   "ASSISTANT_SIGNING_SECRET": "dummy-signing-secret"}
         payload = pairing_payload(values)
         self.assertEqual(json.loads(payload), {"type": "smart_navigation_pairing",
                          "version": 1, "pairing_code": "demo-code-123456"})
         self.assertNotIn(values["OPENAI_API_KEY"], payload)
+        self.assertNotIn(values["GEMINI_API_KEY"], payload)
         self.assertNotIn(values["ASSISTANT_SIGNING_SECRET"], payload)
 
     def test_qr_png_encodes_the_same_validated_payload(self):
