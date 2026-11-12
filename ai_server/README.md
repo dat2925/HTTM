@@ -22,10 +22,10 @@ Tests: `..\.venv\Scripts\python.exe -X utf8 -B -m unittest discover -p "test_*.p
 
 See [handoff](../docs/HANDOFF_PEDESTRIAN.md) for contract changes and phone validation.
 
-Optional OpenAI Assistant: `OPENAI_API_KEY` is read only from this directory's `.env`.
+Optional AI Assistant (OpenAI or Gemini): `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ASSISTANT_PROVIDER` (`openai` or `gemini`), `OPENAI_ASSISTANT_MODEL`, and `GEMINI_ASSISTANT_MODEL` are read only from this directory's `.env`.
 For a new clone, copy `.env.example` to `.env` only if it does not exist, then set the key locally. Never copy secrets from the reference fork or into Flutter assets.
 Run `python setup_assistant.py` to provision signing/pairing secrets; use
-`--show-pairing-code` to give the device its pairing code, never the OpenAI key.
+`--show-pairing-code` to give the device its pairing code, never the OpenAI or Gemini key.
 Assistant endpoints require HTTPS, device bearer auth, and persistent SQLite
 rate/spend limits. No tool directly changes navigation. Defaults: 1 USD/day total,
 0.5 USD/day/device, 6 turns/min/device, 0.05 USD maximum reservation/turn.

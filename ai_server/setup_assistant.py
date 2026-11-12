@@ -1,4 +1,4 @@
-"""Provision local pairing secrets without printing or changing OPENAI_API_KEY."""
+"""Provision local pairing secrets without printing or changing OPENAI_API_KEY or GEMINI_API_KEY."""
 import argparse
 import json
 import re
@@ -47,7 +47,9 @@ if __name__ == "__main__":
     parser.add_argument("--qr", action="store_true", help="Write a private pairing QR PNG locally (not served by HTTP).")
     args = parser.parse_args()
     values = provision(Path(__file__).resolve().with_name(".env"))
-    print("Backend assistant secrets configured. OpenAI key present:", bool(values.get("OPENAI_API_KEY")))
+    openai_present = bool(values.get("OPENAI_API_KEY"))
+    gemini_present = bool(values.get("GEMINI_API_KEY"))
+    print("Backend assistant secrets configured. OpenAI key present:", openai_present, "Gemini key present:", gemini_present)
     if args.show_pairing_code:
         print("Device pairing code:", values["ASSISTANT_PAIRING_CODE"])
     if args.qr:

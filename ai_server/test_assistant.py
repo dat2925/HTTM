@@ -8,14 +8,26 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 from unittest.mock import patch
+import httpx
 from PIL import Image
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from assistant_config import AssistantSettings
 from assistant_guard import AssistantGuard, AssistantError
-from assistant_models import ChatRequest, FinalAnswer
-from assistant_service import AssistantService, sanitize_answer, prepare_image
+from assistant_models import ChatRequest, FinalAnswer, ToolArguments
+from assistant_service import (
+    AssistantService,
+    GeminiResponses,
+    OpenAIResponses,
+    TOOLS,
+    build_provider,
+    gemini_schema,
+    prepare_image,
+    sanitize_answer,
+    strict_answer_schema,
+)
 import assistant_router
+import check_secret_boundary
 
 
 def request(**kwargs):
@@ -244,6 +256,297 @@ class EndpointTests(unittest.TestCase, Fixture):
         response = self.client.post('/assistant/unpair', headers=headers)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.get('/assistant/status', headers=headers).status_code, 401)
+
+
+class _FakeHTTPResponse:
+    def __init__(self, status_code=200, data=None):
+        self.status_code = status_code
+        self._data = data if data is not None else {}
+        self.text = json.dumps(self._data)
+
+    def json(self):
+        return self._data
+
+
+class GeminiProviderTests(unittest.IsolatedAsyncioTestCase, Fixture):
+    def setUp(self):
+        self.setup()
+        self.gemini_settings = AssistantSettings(
+            api_key='gemini-test-placeholder',
+            signing_secret='x' * 40,
+            pairing_code='pairing-test-code',
+            provider='gemini',
+            model='gemini-3.5-flash-lite',
+            input_usd_per_1m=0.30,
+            output_usd_per_1m=2.50,
+            state_path=self.settings.state_path,
+        )
+
+    def tearDown(self):
+        self.teardown()
+
+    def _env(self, **overrides):
+        base = {
+            'ASSISTANT_SIGNING_SECRET': 's' * 40,
+            'ASSISTANT_PAIRING_CODE': 'p' * 16,
+        }
+        base.update(overrides)
+        return base
+
+    def test_provider_selection_matrix_and_fail_closed_cases(self):
+        # 1. Neither key set -> disabled, defaults preserved
+        with patch('assistant_config.dotenv_values', return_value=self._env()):
+            s = AssistantSettings.load()
+            self.assertFalse(s.enabled)
+            self.assertEqual(s.provider, 'openai')
+            self.assertEqual(s.model, 'gpt-4.1-mini')
+
+        # 2. Only OPENAI_API_KEY set -> openai selected
+        with patch('assistant_config.dotenv_values', return_value=self._env(OPENAI_API_KEY='oa-placeholder')):
+            s = AssistantSettings.load()
+            self.assertTrue(s.enabled)
+            self.assertEqual(s.provider, 'openai')
+            self.assertEqual(s.model, 'gpt-4.1-mini')
+            self.assertEqual((s.input_usd_per_1m, s.output_usd_per_1m), (0.40, 1.60))
+
+        # 3. Only GEMINI_API_KEY set -> gemini selected with default model gemini-3.5-flash-lite
+        with patch('assistant_config.dotenv_values', return_value=self._env(GEMINI_API_KEY='gm-placeholder')):
+            s = AssistantSettings.load()
+            self.assertTrue(s.enabled)
+            self.assertEqual(s.provider, 'gemini')
+            self.assertEqual(s.model, 'gemini-3.5-flash-lite')
+            self.assertEqual((s.input_usd_per_1m, s.output_usd_per_1m), (0.30, 2.50))
+
+        # 4. Both keys set, ASSISTANT_PROVIDER unset -> openai wins
+        with patch('assistant_config.dotenv_values', return_value=self._env(
+                OPENAI_API_KEY='oa-placeholder', GEMINI_API_KEY='gm-placeholder')):
+            s = AssistantSettings.load()
+            self.assertTrue(s.enabled)
+            self.assertEqual(s.provider, 'openai')
+            self.assertEqual(s.model, 'gpt-4.1-mini')
+
+        # 5. Both keys set, ASSISTANT_PROVIDER=gemini -> gemini wins
+        with patch('assistant_config.dotenv_values', return_value=self._env(
+                ASSISTANT_PROVIDER='gemini', OPENAI_API_KEY='oa-placeholder', GEMINI_API_KEY='gm-placeholder',
+                GEMINI_ASSISTANT_MODEL='gemini-3.5-flash-lite')):
+            s = AssistantSettings.load()
+            self.assertTrue(s.enabled)
+            self.assertEqual(s.provider, 'gemini')
+            self.assertEqual(s.model, 'gemini-3.5-flash-lite')
+            self.assertEqual((s.input_usd_per_1m, s.output_usd_per_1m), (0.30, 2.50))
+
+        # 6. ASSISTANT_PROVIDER=gemini but GEMINI_API_KEY missing -> disabled even if OPENAI_API_KEY present
+        with patch('assistant_config.dotenv_values', return_value=self._env(
+                ASSISTANT_PROVIDER='gemini', OPENAI_API_KEY='oa-placeholder')):
+            s = AssistantSettings.load()
+            self.assertFalse(s.enabled)
+
+        # 7. ASSISTANT_PROVIDER=openai but OPENAI_API_KEY missing -> disabled even if GEMINI_API_KEY present
+        with patch('assistant_config.dotenv_values', return_value=self._env(
+                ASSISTANT_PROVIDER='openai', GEMINI_API_KEY='gm-placeholder')):
+            s = AssistantSettings.load()
+            self.assertFalse(s.enabled)
+
+        # 8. Unknown ASSISTANT_PROVIDER -> fail closed
+        with patch('assistant_config.dotenv_values', return_value=self._env(
+                ASSISTANT_PROVIDER='other', OPENAI_API_KEY='oa-placeholder', GEMINI_API_KEY='gm-placeholder')):
+            s = AssistantSettings.load()
+            self.assertFalse(s.enabled)
+
+        # 9. Disallowed GEMINI_ASSISTANT_MODEL -> fail closed
+        with patch('assistant_config.dotenv_values', return_value=self._env(
+                GEMINI_API_KEY='gm-placeholder', GEMINI_ASSISTANT_MODEL='gemini-1.5-pro')):
+            s = AssistantSettings.load()
+            self.assertFalse(s.enabled)
+
+        # 10. AssistantService selects provider class from settings when none injected
+        self.assertIsInstance(AssistantService(self.settings, self.guard).provider, OpenAIResponses)
+        self.assertIsInstance(AssistantService(self.gemini_settings, self.guard).provider, GeminiResponses)
+        self.assertIsInstance(build_provider(self.gemini_settings), GeminiResponses)
+        self.assertIn('GEMINI_API_KEY', check_secret_boundary.SECRET_KEYS)
+
+    def test_schema_and_request_translation(self):
+        provider = GeminiResponses(self.gemini_settings)
+        answer_schema = gemini_schema(strict_answer_schema())
+        dump = json.dumps(answer_schema)
+        self.assertNotIn('$defs', dump)
+        self.assertNotIn('$ref', dump)
+        self.assertNotIn('additionalProperties', dump)
+        self.assertNotIn('maxLength', dump)
+        self.assertNotIn('title', dump)
+        self.assertEqual(answer_schema['properties']['observations']['items']['type'], 'object')
+
+        tool_schema = gemini_schema(ToolArguments.model_json_schema())
+        self.assertEqual(tool_schema['properties']['place_id'], {'type': 'string', 'nullable': True})
+
+        call_id = 'call_123'
+        payload = {
+            'model': 'gemini-3.5-flash-lite',
+            'instructions': 'System rules',
+            'input': [
+                {'role': 'user', 'content': 'Previous question'},
+                {'role': 'assistant', 'content': 'Previous answer'},
+                {'role': 'user', 'content': [
+                    {'type': 'input_text', 'text': '{"message":"Current"}'},
+                    {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,QUJDRA==', 'detail': 'low'},
+                ]},
+                {'type': 'function_call', 'name': 'search_places', 'call_id': call_id,
+                 'arguments': '{"query":"công viên"}', 'thought_signature': 'sig-1'},
+                {'type': 'function_call_output', 'call_id': call_id,
+                 'output': '{"place_id":"p1","display_name":"Công viên"}'},
+            ],
+            'tools': TOOLS,
+            'tool_choice': 'auto',
+            'max_output_tokens': 500,
+            'text': {'format': {'type': 'json_schema', 'name': 'navigation_assistant_reply',
+                                'strict': True, 'schema': strict_answer_schema()}},
+        }
+
+        # Tool-enabled round: includes tools + toolConfig AUTO, omits responseSchema from generationConfig
+        req_auto = provider.translate_request(payload)
+        self.assertIn('System rules', req_auto['systemInstruction']['parts'][0]['text'])
+        self.assertEqual(req_auto['toolConfig'], {'functionCallingConfig': {'mode': 'AUTO'}})
+        self.assertEqual(len(req_auto['tools'][0]['functionDeclarations']), 3)
+        self.assertNotIn('responseSchema', req_auto['generationConfig'])
+        self.assertNotIn('responseMimeType', req_auto['generationConfig'])
+        self.assertEqual(req_auto['generationConfig']['maxOutputTokens'], 500)
+        self.assertEqual(req_auto['generationConfig']['thinkingConfig'], {'thinkingLevel': 'minimal'})
+        self.assertEqual(req_auto['contents'][2]['parts'][1],
+                         {'inlineData': {'mimeType': 'image/jpeg', 'data': 'QUJDRA=='}})
+        self.assertEqual(req_auto['contents'][3], {
+            'role': 'model',
+            'parts': [{'functionCall': {'name': 'search_places', 'args': {'query': 'công viên'}},
+                       'thoughtSignature': 'sig-1'}],
+        })
+        self.assertEqual(req_auto['contents'][4], {
+            'role': 'user',
+            'parts': [{'functionResponse': {'name': 'search_places',
+                                            'response': {'place_id': 'p1', 'display_name': 'Công viên'}}}],
+        })
+
+        # Forced function choice (used by smoke_assistant.py)
+        req_forced = provider.translate_request({**payload, 'tool_choice': {'type': 'function', 'name': 'get_journey_status'}})
+        self.assertEqual(req_forced['toolConfig'], {
+            'functionCallingConfig': {'mode': 'ANY', 'allowedFunctionNames': ['get_journey_status']}
+        })
+
+        # Final schema-only round (tool_choice="none"): includes responseMimeType + responseSchema, omits tools
+        req_none = provider.translate_request({**payload, 'tool_choice': 'none'})
+        self.assertNotIn('tools', req_none)
+        self.assertEqual(req_none['generationConfig']['responseMimeType'], 'application/json')
+        self.assertEqual(req_none['generationConfig']['responseSchema'], answer_schema)
+
+    async def test_gemini_end_to_end_tool_round_final_answer_cost_and_header_security(self):
+        provider = GeminiResponses(self.gemini_settings)
+        guard = AssistantGuard(self.gemini_settings, clock=lambda: self.clock)
+        service = AssistantService(self.gemini_settings, guard, provider)
+
+        calls_seen = []
+        gemini_replies = [
+            _FakeHTTPResponse(200, {
+                'candidates': [{
+                    'finishReason': 'STOP',
+                    'content': {'role': 'model', 'parts': [
+                        {'functionCall': {'name': 'get_journey_status', 'args': {}}}
+                    ]},
+                }],
+                'usageMetadata': {'promptTokenCount': 1000, 'candidatesTokenCount': 100, 'thoughtsTokenCount': 0},
+            }),
+            _FakeHTTPResponse(200, {
+                'candidates': [{
+                    'finishReason': 'STOP',
+                    'content': {'role': 'model', 'parts': [
+                        {'text': json.dumps({
+                            'kind': 'information',
+                            'text': 'Tuyến đi bộ được cập nhật từ GPS.',
+                            'observations': [],
+                            'interpretation': [],
+                            'recommendations': [],
+                        })}
+                    ]},
+                }],
+                'usageMetadata': {'promptTokenCount': 1000, 'candidatesTokenCount': 100, 'thoughtsTokenCount': 0},
+            }),
+        ]
+
+        async def fake_post(_client, url, headers=None, json=None):
+            calls_seen.append((url, headers, json))
+            return gemini_replies.pop(0)
+
+        with patch.object(httpx.AsyncClient, 'post', new=fake_post):
+            result = await service.chat('client', request())
+
+        self.assertEqual(len(calls_seen), 2)
+        for url, headers, _ in calls_seen:
+            self.assertNotIn(self.gemini_settings.api_key, url)
+            self.assertNotIn('key=', url)
+            self.assertEqual(headers.get('x-goog-api-key'), self.gemini_settings.api_key)
+        # Second call had functionResponse from round 1
+        self.assertEqual(calls_seen[1][2]['contents'][-1]['parts'][0]['functionResponse']['name'], 'get_journey_status')
+        # Cost: 2000 input tokens * $0.30/1M + 200 output tokens * $2.50/1M = 0.0006 + 0.0005 = 0.0011 USD
+        self.assertAlmostEqual(result['usage_usd'], 0.0011, places=6)
+        self.assertAlmostEqual(guard.usage('client')['spent_usd'], 0.0011, places=6)
+
+    async def test_gemini_two_step_schema_fallback_when_auto_round_returns_plain_text(self):
+        provider = GeminiResponses(self.gemini_settings)
+        guard = AssistantGuard(self.gemini_settings, clock=lambda: self.clock)
+        service = AssistantService(self.gemini_settings, guard, provider)
+
+        bodies = []
+        replies = [
+            _FakeHTTPResponse(200, {
+                'candidates': [{'finishReason': 'STOP', 'content': {'parts': [{'text': 'Not valid JSON yet'}]}}],
+                'usageMetadata': {'promptTokenCount': 300, 'candidatesTokenCount': 20},
+            }),
+            _FakeHTTPResponse(200, {
+                'candidates': [{'finishReason': 'STOP', 'content': {'parts': [
+                    {'text': json.dumps({'kind': 'information', 'text': 'Phản hồi chuẩn schema.'})}
+                ]}}],
+                'usageMetadata': {'promptTokenCount': 300, 'candidatesTokenCount': 30},
+            }),
+        ]
+
+        async def fake_post(_client, url, headers=None, json=None):
+            bodies.append(json)
+            return replies.pop(0)
+
+        with patch.object(httpx.AsyncClient, 'post', new=fake_post):
+            result = await service.chat('client', request())
+
+        self.assertEqual(len(bodies), 2)
+        self.assertIn('tools', bodies[0])
+        self.assertNotIn('tools', bodies[1])
+        self.assertEqual(bodies[1]['generationConfig']['responseMimeType'], 'application/json')
+        self.assertIn('responseSchema', bodies[1]['generationConfig'])
+        self.assertIn('Phản hồi chuẩn schema.', result['text'])
+
+    async def test_gemini_blocked_empty_and_http_errors_map_cleanly_without_leaking_secrets(self):
+        provider = GeminiResponses(self.gemini_settings)
+        guard = AssistantGuard(self.gemini_settings, clock=lambda: self.clock)
+        service = AssistantService(self.gemini_settings, guard, provider)
+
+        for blocked_payload in [
+            {'promptFeedback': {'blockReason': 'SAFETY'}, 'usageMetadata': {'promptTokenCount': 50}},
+            {'candidates': [{'finishReason': 'SAFETY', 'content': {'parts': []}}], 'usageMetadata': {'promptTokenCount': 50}},
+            {'candidates': []},
+        ]:
+            with patch.object(httpx.AsyncClient, 'post', return_value=_FakeHTTPResponse(200, blocked_payload)):
+                with self.assertRaises(AssistantError) as ctx:
+                    await service.chat('client-' + str(uuid4()), request())
+                self.assertEqual(ctx.exception.status, 502)
+                self.assertEqual(ctx.exception.code, 'incomplete')
+                self.assertNotIn(self.gemini_settings.api_key, str(ctx.exception))
+
+        for status_code, expected_code in [(401, 'provider_credentials'), (403, 'provider_credentials'),
+                                           (429, 'provider_limit'), (500, 'provider_error')]:
+            secret_body = {'error': {'message': 'leaked-detail-' + self.gemini_settings.api_key}}
+            with patch.object(httpx.AsyncClient, 'post', return_value=_FakeHTTPResponse(status_code, secret_body)):
+                with self.assertRaises(AssistantError) as ctx:
+                    await service.chat('client-' + str(uuid4()), request())
+                self.assertEqual(ctx.exception.status, 502)
+                self.assertEqual(ctx.exception.code, expected_code)
+                self.assertNotIn('leaked-detail', str(ctx.exception))
+                self.assertNotIn(self.gemini_settings.api_key, str(ctx.exception))
 
 
 if __name__ == '__main__': unittest.main()

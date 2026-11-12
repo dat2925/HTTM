@@ -10,15 +10,18 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 
+SECRET_KEYS = {'OPENAI_API_KEY', 'GEMINI_API_KEY', 'ASSISTANT_PAIRING_CODE', 'ASSISTANT_SIGNING_SECRET'}
+
+
 def check(apk: Path | None, expected_hash: str | None):
     root = Path(__file__).resolve().parent.parent
     values = dotenv_values(root / 'ai_server' / '.env', interpolate=False)
     secrets = [value.encode() for key, value in values.items()
-               if key in {'OPENAI_API_KEY', 'ASSISTANT_PAIRING_CODE', 'ASSISTANT_SIGNING_SECRET'} and value]
+               if key in SECRET_KEYS and value]
     if not secrets: raise RuntimeError('Backend secrets not configured')
     flutter_env = (root / '.env').read_bytes()
     flutter_values = dotenv_values(root / '.env', interpolate=False)
-    if {'OPENAI_API_KEY', 'ASSISTANT_PAIRING_CODE', 'ASSISTANT_SIGNING_SECRET'} & flutter_values.keys():
+    if SECRET_KEYS & flutter_values.keys():
         raise RuntimeError('Backend secret configuration in Flutter env asset')
     if expected_hash and hashlib.sha256(flutter_env).hexdigest().upper() != expected_hash.upper():
         raise RuntimeError('Flutter .env changed')

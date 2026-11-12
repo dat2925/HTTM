@@ -114,10 +114,313 @@ class OpenAIResponses:
             return response.json()
 
 
+def gemini_schema(schema: dict) -> dict:
+    """Convert Pydantic/OpenAI JSON Schema into Gemini v1beta OpenAPI Schema subset."""
+    defs = {**schema.get("$defs", {}), **schema.get("definitions", {})}
+
+    def convert(node):
+        if not isinstance(node, dict):
+            return node
+        if "$ref" in node:
+            ref_name = node["$ref"].rsplit("/", 1)[-1]
+            return convert(defs.get(ref_name, {}))
+        for union_key in ("anyOf", "oneOf"):
+            if union_key in node:
+                branches = node[union_key]
+                non_null = [b for b in branches if not (isinstance(b, dict) and b.get("type") == "null")]
+                has_null = len(non_null) != len(branches)
+                if len(non_null) == 1:
+                    merged = convert(non_null[0])
+                    if has_null:
+                        merged["nullable"] = True
+                    return merged
+                out = {"anyOf": [convert(b) for b in non_null]}
+                if has_null:
+                    out["nullable"] = True
+                return out
+        out = {}
+        node_type = node.get("type")
+        if isinstance(node_type, list):
+            non_null_types = [t for t in node_type if t != "null"]
+            if non_null_types:
+                out["type"] = non_null_types[0]
+            if "null" in node_type:
+                out["nullable"] = True
+        elif isinstance(node_type, str):
+            out["type"] = node_type
+        for key in ("description", "enum", "format", "nullable", "minItems", "maxItems", "minimum", "maximum"):
+            if key in node:
+                out[key] = node[key]
+        if "properties" in node and isinstance(node["properties"], dict):
+            out["properties"] = {k: convert(v) for k, v in node["properties"].items()}
+            if node.get("required"):
+                out["required"] = [k for k in node["required"] if k in out["properties"]]
+        if "items" in node:
+            out["items"] = convert(node["items"])
+        return out
+
+    return convert(schema)
+
+
+class GeminiResponses:
+    """Direct Gemini v1beta generateContent REST adapter matching OpenAIResponses.create(payload)."""
+    BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    def __init__(self, settings: AssistantSettings):
+        self.settings = settings
+
+    def translate_request(self, payload: dict, *, force_schema_only: bool = False) -> dict:
+        tools = payload.get("tools") or []
+        tool_choice = payload.get("tool_choice", "auto")
+        use_tools = bool(tools) and tool_choice != "none" and not force_schema_only
+        text_format = (payload.get("text") or {}).get("format") or {}
+        schema_obj = text_format.get("schema") if text_format.get("type") == "json_schema" else None
+        converted_schema = gemini_schema(schema_obj) if schema_obj else None
+
+        instructions = payload.get("instructions") or ""
+        if use_tools and converted_schema:
+            # Gemini v1beta rejects combining tools and responseMimeType="application/json" in one request.
+            # Include the schema contract in systemInstruction during tool rounds, and enforce native
+            # responseSchema on tool_choice="none" rounds or via an automatic schema-only follow-up if needed.
+            instructions = (
+                f"{instructions}\nKhi không gọi hàm (tool), bắt buộc chỉ trả về một JSON object hợp lệ "
+                f"theo đúng schema sau (không kèm markdown):\n{json_text(converted_schema)}"
+            ).strip()
+
+        contents = []
+        call_names = {}
+        for item in payload.get("input", []):
+            item_type = item.get("type")
+            if item_type == "function_call":
+                name = item.get("name") or ""
+                call_id = item.get("call_id") or ""
+                if call_id and name:
+                    call_names[call_id] = name
+                raw_args = item.get("arguments", "{}")
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                except ValueError:
+                    args = {}
+                if not isinstance(args, dict):
+                    args = {}
+                part = {"functionCall": {"name": name, "args": args}}
+                if item.get("thought_signature"):
+                    part["thoughtSignature"] = item["thought_signature"]
+                if contents and contents[-1].get("_kind") == "function_call":
+                    contents[-1]["parts"].append(part)
+                else:
+                    contents.append({"role": "model", "parts": [part], "_kind": "function_call"})
+                continue
+            if item_type == "function_call_output":
+                call_id = item.get("call_id") or ""
+                name = item.get("name") or call_names.get(call_id) or "unknown"
+                raw_out = item.get("output", "{}")
+                try:
+                    parsed = json.loads(raw_out) if isinstance(raw_out, str) else raw_out
+                except ValueError:
+                    parsed = {"result": str(raw_out)}
+                if not isinstance(parsed, dict):
+                    parsed = {"result": parsed}
+                part = {"functionResponse": {"name": name, "response": parsed}}
+                if contents and contents[-1].get("_kind") == "function_call_output":
+                    contents[-1]["parts"].append(part)
+                else:
+                    contents.append({"role": "user", "parts": [part], "_kind": "function_call_output"})
+                continue
+            role = "model" if item.get("role") == "assistant" else "user"
+            raw_content = item.get("content", "")
+            parts = []
+            if isinstance(raw_content, str):
+                parts.append({"text": raw_content})
+            elif isinstance(raw_content, list):
+                for sub in raw_content:
+                    sub_type = sub.get("type")
+                    if sub_type in ("input_text", "output_text", "text"):
+                        parts.append({"text": sub.get("text", "")})
+                    elif sub_type == "input_image":
+                        image_url = sub.get("image_url") or ""
+                        mime_type, b64_data = "image/jpeg", image_url
+                        if image_url.startswith("data:") and "," in image_url:
+                            header, b64_data = image_url.split(",", 1)
+                            mime_part = header[5:].split(";", 1)[0]
+                            if mime_part:
+                                mime_type = mime_part
+                        parts.append({"inlineData": {"mimeType": mime_type, "data": b64_data}})
+            if parts:
+                contents.append({"role": role, "parts": parts})
+
+        for entry in contents:
+            entry.pop("_kind", None)
+
+        gen_config = {
+            "maxOutputTokens": payload.get("max_output_tokens", self.settings.max_output_tokens),
+            "thinkingConfig": {"thinkingLevel": "minimal"},  # 3.x rejects thinkingBudget
+        }
+        if not use_tools and converted_schema:
+            gen_config["responseMimeType"] = "application/json"
+            gen_config["responseSchema"] = converted_schema
+
+        body = {"contents": contents, "generationConfig": gen_config}
+        if instructions:
+            body["systemInstruction"] = {"parts": [{"text": instructions}]}
+        if use_tools:
+            declarations = []
+            for tool in tools:
+                decl = {"name": tool["name"], "description": tool.get("description", "")}
+                if tool.get("parameters"):
+                    decl["parameters"] = gemini_schema(tool["parameters"])
+                declarations.append(decl)
+            body["tools"] = [{"functionDeclarations": declarations}]
+            if isinstance(tool_choice, dict) and tool_choice.get("name"):
+                body["toolConfig"] = {
+                    "functionCallingConfig": {"mode": "ANY", "allowedFunctionNames": [tool_choice["name"]]}
+                }
+            else:
+                body["toolConfig"] = {"functionCallingConfig": {"mode": "AUTO"}}
+        return body
+
+    @staticmethod
+    def translate_response(data: dict) -> dict:
+        if not isinstance(data, dict):
+            raise ValueError("Invalid Gemini response")
+        usage_meta = data.get("usageMetadata")
+        usage = None
+        if isinstance(usage_meta, dict) and usage_meta:
+            prompt_tokens = usage_meta.get("promptTokenCount")
+            tool_prompt_tokens = usage_meta.get("toolUsePromptTokenCount", 0) or 0
+            cand_tokens = usage_meta.get("candidatesTokenCount", 0)
+            thought_tokens = usage_meta.get("thoughtsTokenCount", 0) or 0
+            in_tokens = (prompt_tokens + tool_prompt_tokens
+                         if isinstance(prompt_tokens, int) and not isinstance(prompt_tokens, bool)
+                         and isinstance(tool_prompt_tokens, int) and not isinstance(tool_prompt_tokens, bool)
+                         else prompt_tokens)
+            out_tokens = (cand_tokens + thought_tokens
+                          if isinstance(cand_tokens, int) and not isinstance(cand_tokens, bool)
+                          and isinstance(thought_tokens, int) and not isinstance(thought_tokens, bool)
+                          else cand_tokens)
+            usage = {"input_tokens": in_tokens, "output_tokens": out_tokens}
+
+        prompt_feedback = data.get("promptFeedback") or {}
+        candidates = data.get("candidates") or []
+        if prompt_feedback.get("blockReason") or not candidates:
+            return {"status": "incomplete", "usage": usage or {"input_tokens": 0, "output_tokens": 0}, "output": []}
+
+        candidate = candidates[0] if isinstance(candidates[0], dict) else {}
+        finish_reason = candidate.get("finishReason")
+        if finish_reason not in (None, "STOP"):
+            return {"status": "incomplete", "usage": usage or {"input_tokens": 0, "output_tokens": 0}, "output": []}
+
+        content = candidate.get("content") or {}
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if not isinstance(parts, list) or not parts:
+            return {"status": "incomplete", "usage": usage or {"input_tokens": 0, "output_tokens": 0}, "output": []}
+
+        outputs = []
+        text_parts = []
+        for part in parts:
+            if not isinstance(part, dict) or part.get("thought") is True:
+                continue
+            if "functionCall" in part and isinstance(part["functionCall"], dict):
+                fc = part["functionCall"]
+                name = fc.get("name") or ""
+                args = fc.get("args")
+                args_str = args if isinstance(args, str) else json_text(args if args is not None else {})
+                call_item = {
+                    "type": "function_call",
+                    "name": name,
+                    "call_id": fc.get("id") or ("call_" + str(uuid4())),
+                    "arguments": args_str,
+                }
+                if part.get("thoughtSignature"):
+                    call_item["thought_signature"] = part["thoughtSignature"]
+                outputs.append(call_item)
+            elif isinstance(part.get("text"), str):
+                text_parts.append(part["text"])
+
+        if text_parts:
+            outputs.append({"type": "message", "content": [{"type": "output_text", "text": "".join(text_parts)}]})
+
+        if not outputs:
+            return {"status": "incomplete", "usage": usage or {"input_tokens": 0, "output_tokens": 0}, "output": []}
+
+        return {"status": "completed", "usage": usage, "output": outputs}
+
+    async def _post(self, client: httpx.AsyncClient, model: str, body: dict) -> dict:
+        url = f"{self.BASE_URL}/{model}:generateContent"
+        response = await client.post(url, headers={"x-goog-api-key": self.settings.api_key}, json=body)
+        if response.status_code != 200:
+            # Never echo provider errors, secrets, prompts or uploaded images.
+            code = ('provider_credentials' if response.status_code in (401, 403)
+                    else 'provider_limit' if response.status_code == 429 else 'provider_error')
+            raise AssistantError(502, code, "Gemini chưa xử lý được yêu cầu. Dẫn đường vẫn hoạt động.")
+        return response.json()
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
+            if len(lines) >= 2 and lines[-1].strip() == "```":
+                return "\n".join(lines[1:-1]).strip()
+        return stripped
+
+    async def create(self, payload):
+        model = payload.get("model") or self.settings.model
+        tools = payload.get("tools") or []
+        tool_choice = payload.get("tool_choice", "auto")
+        use_tools = bool(tools) and tool_choice != "none"
+        text_format = (payload.get("text") or {}).get("format") or {}
+        has_schema = text_format.get("type") == "json_schema" and bool(text_format.get("schema"))
+
+        async with httpx.AsyncClient(timeout=self.settings.timeout_seconds) as client:
+            body = self.translate_request(payload)
+            raw = await self._post(client, model, body)
+            translated = self.translate_response(raw)
+
+            if translated.get("status") != "completed" or not use_tools or not has_schema:
+                return translated
+
+            outputs = translated.get("output") or []
+            if any(item.get("type") == "function_call" for item in outputs):
+                return translated
+
+            # Model chose not to call a tool on a tool-enabled round. Verify JSON schema conformance;
+            # if the text is fenced or not yet conforming, normalize or run a schema-constrained pass.
+            text = "".join(
+                part.get("text", "")
+                for item in outputs if item.get("type") == "message"
+                for part in item.get("content", []) if part.get("type") == "output_text"
+            )
+            cleaned = self._strip_code_fence(text)
+            try:
+                FinalAnswer.model_validate_json(cleaned)
+                if cleaned != text:
+                    translated["output"] = [{"type": "message", "content": [{"type": "output_text", "text": cleaned}]}]
+                return translated
+            except ValueError:
+                pass
+
+            schema_body = self.translate_request(payload, force_schema_only=True)
+            second_raw = await self._post(client, model, schema_body)
+            second = self.translate_response(second_raw)
+            first_usage = translated.get("usage")
+            second_usage = second.get("usage")
+            if isinstance(first_usage, dict) and isinstance(second_usage, dict):
+                in1, out1 = first_usage.get("input_tokens"), first_usage.get("output_tokens")
+                in2, out2 = second_usage.get("input_tokens"), second_usage.get("output_tokens")
+                if all(isinstance(v, int) and not isinstance(v, bool) for v in (in1, out1, in2, out2)):
+                    second["usage"] = {"input_tokens": in1 + in2, "output_tokens": min(self.settings.max_output_tokens, out1 + out2)}
+            return second
+
+
+def build_provider(settings: AssistantSettings):
+    return GeminiResponses(settings) if settings.provider == "gemini" else OpenAIResponses(settings)
+
+
 class AssistantService:
     def __init__(self, settings: AssistantSettings, guard: AssistantGuard, provider=None, search=geocode):
         self.settings, self.guard = settings, guard
-        self.provider = provider or OpenAIResponses(settings)
+        self.provider = provider or build_provider(settings)
         self.search = search
         self.sessions = OrderedDict()
         self.capacity = asyncio.Semaphore(4)
@@ -199,7 +502,7 @@ class AssistantService:
                     0 <= usage['input_tokens'] <= self.settings.max_input_bytes + 4000 and
                     0 <= usage['output_tokens'] <= self.settings.max_output_tokens):
                 raise AssistantError(502, 'invalid_usage', 'Không xác minh được hạn mức phản hồi.')
-            cost += (usage["input_tokens"] * .40 + usage["output_tokens"] * 1.60) / 1000000
+            cost += (usage["input_tokens"] * self.settings.input_usd_per_1m + usage["output_tokens"] * self.settings.output_usd_per_1m) / 1000000
             if cost > self.settings.reserve_usd:
                 raise AssistantError(429, "turn_cost", "Đã đạt giới hạn chi phí cho yêu cầu này.")
             if response.get("status") != "completed":

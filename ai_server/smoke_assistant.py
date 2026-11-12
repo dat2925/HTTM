@@ -9,18 +9,18 @@ from PIL import Image
 from assistant_config import AssistantSettings
 from assistant_guard import AssistantGuard, AssistantError
 from assistant_models import ChatRequest
-from assistant_service import AssistantService, OpenAIResponses
+from assistant_service import AssistantService, build_provider
 
 
-class SmokeProvider(OpenAIResponses):
+class SmokeProvider:
     def __init__(self, settings):
-        super().__init__(settings)
+        self.delegate = build_provider(settings)
         self.calls = self.tool_calls = 0
     async def create(self, payload):
         if self.calls == 0:
             payload = {**payload, "tool_choice": {"type": "function", "name": "get_journey_status"}}
         self.calls += 1
-        response = await super().create(payload)
+        response = await self.delegate.create(payload)
         self.tool_calls += sum(item.get('type') == 'function_call' for item in response.get('output', []))
         return response
 
@@ -38,7 +38,7 @@ async def main():
         'image_base64': base64.b64encode(image.getvalue()).decode(),
         'context': {'captured_at': now, 'image_captured_at': now, 'status': 'idle', 'route_message': 'Chưa đặt điểm đến.'}})
     result = await AssistantService(settings, guard, provider).chat('local-smoke-test', body)
-    print({'live_check': 'passed', 'model': settings.model, 'api_calls': provider.calls,
+    print({'live_check': 'passed', 'provider': settings.provider, 'model': settings.model, 'api_calls': provider.calls,
         'function_calls': provider.tool_calls, 'synthetic_image': True, 'safety': result['safety'], 'usage_usd': result['usage_usd']})
 
 
