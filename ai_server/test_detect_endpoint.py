@@ -50,6 +50,26 @@ class DetectEndpointTests(unittest.TestCase):
             self.assertEqual(response.status_code, 500)
             self.assertEqual(response.json(), {"detail": "Object detection failed."})
 
+    def test_optional_diagnostics_reports_model_and_latency(self):
+        with patch.object(detector, "detect", return_value=[]):
+            response = self.client.post("/detect?diagnostics=true",
+                files={"image": ("frame.png", self.png, "image/png")})
+        data = response.json()["diagnostics"]
+        self.assertEqual(data["model"], os.path.basename(detector.model_name))
+        self.assertEqual(data["runtime"], "ultralytics/cpu")
+        self.assertGreaterEqual(data["inference_ms"], 0)
+
+    def test_exif_rotation_is_applied_before_inference(self):
+        buffer = io.BytesIO()
+        image = Image.new("RGB", (12, 8))
+        exif = image.getexif()
+        exif[274] = 6
+        image.save(buffer, format="JPEG", exif=exif)
+        with patch.object(detector, "detect", return_value=[]) as inference:
+            response = self.upload(buffer.getvalue())
+        self.assertEqual((response.json()["image_width"], response.json()["image_height"]), (8, 12))
+        self.assertEqual(inference.call_args.args[0].size, (8, 12))
+
     def test_upload_exceeding_max_bytes_returns_413_without_reading_all(self):
         bytes_read = 0
         original_read = UploadFile.read

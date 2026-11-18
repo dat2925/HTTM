@@ -25,6 +25,11 @@ class DetectedObject {
     required this.y1,
     required this.x2,
     required this.y2,
+    this.trackId,
+    this.observedAt,
+    this.firstSeenAt,
+    this.consecutiveHits = 1,
+    this.heightGrowthPerSecond,
   });
 
   final String className;
@@ -36,6 +41,36 @@ class DetectedObject {
   final double y1;
   final double x2;
   final double y2;
+  final int? trackId;
+  final DateTime? observedAt, firstSeenAt;
+  final int consecutiveHits;
+
+  /// Rate of ln(normalized box height), not speed/depth/time to collision.
+  final double? heightGrowthPerSecond;
+  bool get isStable => consecutiveHits >= 2;
+
+  DetectedObject withTrack({
+    required int id,
+    required DateTime at,
+    required DateTime firstAt,
+    required int hits,
+    double? heightGrowth,
+  }) => DetectedObject(
+    className: className,
+    confidence: confidence,
+    position: position,
+    danger: danger,
+    areaRatio: areaRatio,
+    x1: x1,
+    y1: y1,
+    x2: x2,
+    y2: y2,
+    trackId: id,
+    observedAt: at,
+    firstSeenAt: firstAt,
+    consecutiveHits: hits,
+    heightGrowthPerSecond: heightGrowth,
+  );
 
   factory DetectedObject.fromJson(Map<String, dynamic> json) {
     final dangerText = json['danger']?.toString().toLowerCase();
@@ -62,11 +97,17 @@ class DetectionResult {
     required this.imageWidth,
     required this.imageHeight,
     required this.objects,
+    this.model,
+    this.runtime,
+    this.inferenceMs,
   });
 
   final int imageWidth;
   final int imageHeight;
   final List<DetectedObject> objects;
+  final String? model;
+  final String? runtime;
+  final double? inferenceMs;
 
   factory DetectionResult.fromJson(Map<String, dynamic> json) {
     if (json['success'] != true) {
@@ -79,6 +120,10 @@ class DetectionResult {
     return DetectionResult(
       imageWidth: (json['image_width'] as num?)?.toInt() ?? 0,
       imageHeight: (json['image_height'] as num?)?.toInt() ?? 0,
+      model: (json['diagnostics'] as Map?)?['model'] as String?,
+      runtime: (json['diagnostics'] as Map?)?['runtime'] as String?,
+      inferenceMs: ((json['diagnostics'] as Map?)?['inference_ms'] as num?)
+          ?.toDouble(),
       objects: rawObjects
           .whereType<Map<String, dynamic>>()
           .map(DetectedObject.fromJson)

@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
@@ -28,17 +29,21 @@ bool modelLabelsUsable(Object? labels) =>
     labels.any((label) => canonicalClassName(label.toString()) != null);
 
 class UltralyticsYoloEngine implements YoloEngine {
-  final _yolo = YOLO(
-    modelPath: AiConfig.deviceModelAsset,
-    task: YOLOTask.detect,
-    useGpu: true,
-    // Match Ultralytics' default max_det rather than the plugin's default 30.
-    numItemsThreshold: 300,
-  );
+  UltralyticsYoloEngine({String? modelAsset})
+    : _asset = modelAsset ?? AiConfig.deviceModelAsset,
+      _yolo = YOLO(
+        modelPath: modelAsset ?? AiConfig.deviceModelAsset,
+        task: YOLOTask.detect,
+        useGpu: true,
+        // Match Ultralytics' default max_det rather than the plugin's default 30.
+        numItemsThreshold: 300,
+      );
+  final YOLO _yolo;
+  final String _asset;
 
   @override
   Future<void> load() async {
-    final metadata = await YOLO.inspectModel(AiConfig.deviceModelAsset);
+    final metadata = await YOLO.inspectModel(_asset);
     final labels = metadata['labels'];
     if (!modelLabelsUsable(labels)) {
       throw const AiDetectionException('Tên lớp trong mô hình không phù hợp.');
@@ -64,10 +69,18 @@ class UltralyticsYoloEngine implements YoloEngine {
 
 class OnDeviceDetector {
   OnDeviceDetector({YoloEngine? engine})
-    : _engine = engine ?? UltralyticsYoloEngine();
+    : modelName = AiConfig.deviceModel,
+      confidence = AiConfig.deviceConfidence,
+      iou = AiConfig.deviceIou,
+      _engine = engine ?? UltralyticsYoloEngine();
+
+  final String modelName;
+  final double confidence, iou;
 
   final YoloEngine _engine;
   Future<void>? _preparation;
+  Completer<void>? _active;
+  bool _disposed = false;
 
   Future<void> prepare() => _preparation ??= _load();
 
@@ -82,10 +95,22 @@ class OnDeviceDetector {
   }
 
   Future<DetectionResult> detect(XFile image) async {
+    if (_disposed || _active != null) {
+      throw const AiDetectionException(
+        'Mô hình nhận diện đang bận hoặc đã đóng.',
+      );
+    }
+    final active = _active = Completer<void>();
     try {
       await prepare();
       final bytes = await uprightImageBytes(await image.readAsBytes());
-      final result = await _engine.predict(bytes, confidence: 0.35, iou: 0.45);
+      final inference = Stopwatch()..start();
+      final result = await _engine.predict(
+        bytes,
+        confidence: confidence,
+        iou: iou,
+      );
+      inference.stop();
       final size = result['imageSize'] as Map;
       final width = (size['width'] as num).toInt();
       final height = (size['height'] as num).toInt();
@@ -119,15 +144,23 @@ class OnDeviceDetector {
         imageWidth: width,
         imageHeight: height,
         objects: objects,
+        model: modelName,
+        runtime: 'LiteRT (delegate unverified)',
+        inferenceMs: inference.elapsedMicroseconds / 1000,
       );
     } on AiDetectionException {
       rethrow;
     } catch (_) {
       throw const AiDetectionException('Nhận diện vật cản trên máy bị lỗi.');
+    } finally {
+      _active = null;
+      active.complete();
     }
   }
 
   Future<void> dispose() async {
+    _disposed = true;
+    await _active?.future;
     try {
       await _preparation;
     } catch (_) {

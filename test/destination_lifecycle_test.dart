@@ -399,7 +399,7 @@ void main() {
         detector.result = scene(DangerLevel.high);
         async.elapse(AiConfig.captureInterval * 2);
         expect(tts.spoken.where((s) => s.$2 == 3).map((s) => s.$1), [
-          'Có xe máy ngay phía trước. Dừng lại kiểm tra.',
+          'Có xe máy phía trước. Dừng lại kiểm tra.',
         ]);
         session.dispose();
         async.flushMicrotasks();

@@ -396,8 +396,10 @@ void main() {
       );
       expect(fSession.cameraError, contains('quá thời gian'));
 
-      // Next cycle also times out within 30s cooldown: warning is not repeated.
+      // A Dart timeout cannot cancel native work. Keep single-flight until it
+      // finishes, rather than queueing another inference on the same model.
       async.elapse(AiConfig.captureInterval + AiConfig.detectTimeout);
+      expect(fDetector.requests, 1);
       expect(
         fTts.spoken.where(
           (s) =>
