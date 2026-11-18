@@ -18,7 +18,7 @@ import 'services/on_device_detection_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: '.env.example');
+  await dotenv.load(fileName: '.env');
   runApp(const MaterialApp(home: _BenchmarkScreen()));
 }
 
