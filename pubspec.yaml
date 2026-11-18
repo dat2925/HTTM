@@ -48,6 +48,7 @@ dependencies:
   flutter_secure_storage: ^11.2.0
   mobile_scanner: ^7.4.2
   ultralytics_yolo: ^0.7.2
+  image: 4.5.4
 
 dev_dependencies:
   flutter_test:

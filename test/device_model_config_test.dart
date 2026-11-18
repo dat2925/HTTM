@@ -4,7 +4,23 @@ import 'package:smart_navigation/config/ai_config.dart';
 import 'package:smart_navigation/services/on_device_detection_service.dart';
 
 void main() {
-  test('DEVICE_MODEL in .env selects the bundled model file', () {
+  test('device thresholds keep defaults and reject invalid probabilities', () {
+    for (final value in ['', 'NaN', 'Infinity', '0', '-1', '1.1']) {
+      dotenv.loadFromString(
+        envString: 'DEVICE_CONFIDENCE=$value\nDEVICE_IOU=$value',
+        isOptional: true,
+      );
+      expect(AiConfig.deviceConfidence, .35);
+      expect(AiConfig.deviceIou, .45);
+    }
+    dotenv.loadFromString(envString: 'DEVICE_CONFIDENCE=.42\nDEVICE_IOU=.6');
+    final detector = OnDeviceDetector();
+    expect(detector.confidence, .42);
+    expect(detector.iou, .6);
+    dotenv.loadFromString(envString: '', isOptional: true);
+    expect(detector.confidence, .42);
+  });
+  test('DEVICE_MODEL in .env.example selects the bundled model file', () {
     dotenv.loadFromString(envString: 'DEVICE_MODEL= yolo11n.tflite ');
     expect(AiConfig.deviceModel, 'yolo11n.tflite');
     expect(AiConfig.deviceModelAsset, 'assets/models/yolo11n.tflite');

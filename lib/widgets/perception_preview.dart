@@ -1,7 +1,7 @@
 import 'package:camera/camera.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 
-import '../config/ai_config.dart';
 import '../models/detection_result.dart';
 import '../models/perception_frame.dart';
 
@@ -9,56 +9,100 @@ import '../models/perception_frame.dart';
 /// lines, and an FPS/latency readout. Purely a read-only view over a
 /// [Stream<PerceptionFrame>] — it owns neither the camera nor the model, so
 /// it can be driven by a fake stream while building the UI.
-class PerceptionPreview extends StatelessWidget {
+class PerceptionPreview extends StatefulWidget {
   const PerceptionPreview({
     super.key,
     required this.controller,
     required this.frames,
     this.detectionBackend,
+    this.now,
   });
 
   final CameraController? controller;
   final Stream<PerceptionFrame> frames;
   final String Function()? detectionBackend;
+  final DateTime Function()? now;
+
+  @override
+  State<PerceptionPreview> createState() => _PerceptionPreviewState();
+}
+
+class _PerceptionPreviewState extends State<PerceptionPreview> {
+  Timer? _expiry;
+
+  @override
+  void initState() {
+    super.initState();
+    _expiry = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _expiry?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final camera = controller;
-    return ColoredBox(
-      color: Colors.black,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (camera != null && camera.value.isInitialized)
-            CameraPreview(camera)
-          else
-            const Center(child: CircularProgressIndicator()),
-          StreamBuilder<PerceptionFrame>(
-            stream: frames,
-            builder: (context, snapshot) {
-              final frame = snapshot.data;
-              return CustomPaint(painter: _OverlayPainter(frame: frame));
-            },
-          ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: StreamBuilder<PerceptionFrame>(
-              stream: frames,
-              builder: (context, snapshot) {
-                final frame = snapshot.data;
-                if (frame == null) return const SizedBox.shrink();
-                return _ReadoutBadge(
-                  text:
-                      '${detectionBackend?.call() == 'device' ? 'Máy ${AiConfig.deviceModel.replaceAll('.tflite', '')}' : 'Server'} · '
-                      '${frame.fps.toStringAsFixed(1)} FPS · '
-                      '${frame.latencyMs} ms',
-                );
-              },
+    final camera = widget.controller;
+    return StreamBuilder<PerceptionFrame>(
+      stream: widget.frames,
+      builder: (context, snapshot) {
+        final frame = snapshot.data;
+        final at = frame?.capturedAt;
+        final now = widget.now?.call() ?? DateTime.now();
+        final stale =
+            at != null &&
+            (at.isAfter(now) ||
+                now.difference(at) > const Duration(seconds: 5));
+        final ratio =
+            frame != null && frame.imageWidth > 0 && frame.imageHeight > 0
+            ? frame.imageWidth / frame.imageHeight
+            : camera != null && camera.value.isInitialized
+            ? (MediaQuery.orientationOf(context) == Orientation.portrait
+                  ? 1 / camera.value.aspectRatio
+                  : camera.value.aspectRatio)
+            : 3 / 4;
+        return ColoredBox(
+          color: Colors.black,
+          child: Center(
+            child: AspectRatio(
+              aspectRatio: ratio,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (camera != null && camera.value.isInitialized)
+                    CameraPreview(camera)
+                  else
+                    const Center(child: CircularProgressIndicator()),
+                  CustomPaint(
+                    painter: _OverlayPainter(frame: stale ? null : frame),
+                  ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: stale
+                        ? const _ReadoutBadge(
+                            text: 'Detection đã cũ · chờ ảnh mới',
+                          )
+                        : frame == null
+                        ? const SizedBox.shrink()
+                        : _ReadoutBadge(
+                            text:
+                                '${frame.backend} · ${frame.model}\n${frame.runtime}\n'
+                                '${frame.fps.toStringAsFixed(1)} FPS · '
+                                'predict ${frame.inferenceMs?.toStringAsFixed(0) ?? '?'} ms\n'
+                                'capture ${frame.captureMs} · detect ${frame.detectionMs} · total ${frame.latencyMs} ms',
+                          ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -118,7 +162,12 @@ class _OverlayPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 3;
       canvas.drawRect(box, paint);
-      _drawLabel(canvas, box.topLeft, object.className, paint.color);
+      _drawLabel(
+        canvas,
+        box.topLeft,
+        '#${object.trackId ?? '?'} ${object.className} ${(object.confidence * 100).toStringAsFixed(0)}% ${object.position}${object.isStable ? '' : ' ?'}',
+        paint.color,
+      );
     }
   }
 

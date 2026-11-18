@@ -6,15 +6,17 @@ import io
 import logging
 import os
 import threading
+import time
 import warnings
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.responses import JSONResponse
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from detector import YoloObstacleDetector
 from geocoder import GeocodeError, GeocodeServiceError, geocode, reverse_geocode
@@ -72,7 +74,7 @@ def health() -> dict[str, str]:
 
 
 @app.post("/detect")
-async def detect(image: UploadFile = File(...)) -> dict[str, object]:
+async def detect(image: UploadFile = File(...), diagnostics: bool = False) -> dict[str, object]:
     max_bytes = int(os.getenv("DETECT_MAX_BYTES", str(DEFAULT_DETECT_MAX_BYTES)))
     chunk_size = max(1, min(65536, max_bytes + 1))
     chunks = bytearray()
@@ -101,6 +103,7 @@ async def detect(image: UploadFile = File(...)) -> dict[str, object]:
             if pil_image.width * pil_image.height > DETECT_MAX_PIXELS:
                 raise HTTPException(status_code=413, detail="Image exceeds maximum pixel limit.")
             pil_image.load()
+            pil_image = ImageOps.exif_transpose(pil_image)
     except HTTPException:
         raise
     except Image.DecompressionBombError as error:
@@ -115,18 +118,27 @@ async def detect(image: UploadFile = File(...)) -> dict[str, object]:
         raise HTTPException(status_code=400, detail="Invalid image data.") from error
 
     width, height = pil_image.size
+    started = time.perf_counter()
     try:
         objects = await run_in_threadpool(detector.detect, pil_image)
     except Exception as error:
         logger.exception("YOLO inference failed")
         raise HTTPException(status_code=500, detail="Object detection failed.") from error
 
-    return {
+    response = {
         "success": True,
         "image_width": width,
         "image_height": height,
         "objects": objects,
     }
+    if diagnostics:
+        response["diagnostics"] = {
+            "model": Path(detector.model_name).name,
+            "runtime": "ultralytics/cpu",
+            # Includes threadpool/lock wait, preprocessing, predict and rules.
+            "inference_ms": (time.perf_counter() - started) * 1000,
+        }
+    return response
 
 
 @app.get("/geocode")

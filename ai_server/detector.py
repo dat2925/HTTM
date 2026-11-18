@@ -159,6 +159,22 @@ class YoloObstacleDetector:
         self._inference_lock = threading.Lock()
         self.model_name = detector_setting("YOLO_MODEL", "yolo11n.pt")
         self.confidence = float(detector_setting("YOLO_CONFIDENCE", "0.35"))
+        iou = detector_setting("YOLO_IOU", "")
+        image_size = detector_setting("YOLO_IMGSZ", "")
+        self.iou = float(iou) if iou else None
+        self.image_size = int(image_size) if image_size else None
+        if not (0 < self.confidence <= 1) or (self.iou is not None and not 0 < self.iou <= 1):
+            raise ValueError("YOLO confidence/IoU must be finite probabilities in (0, 1]")
+        if self.image_size is not None and (self.image_size < 32 or self.image_size > 1920 or self.image_size % 32):
+            raise ValueError("YOLO_IMGSZ must be a multiple of 32 in [32, 1920]")
+
+    def _predict_options(self) -> dict[str, Any]:
+        options: dict[str, Any] = {"conf": self.confidence, "verbose": False, "device": "cpu"}
+        if self.iou is not None:
+            options["iou"] = self.iou
+        if self.image_size is not None:
+            options["imgsz"] = self.image_size
+        return options
 
     def _log_model_classes(self, names: Any) -> None:
         raw_names = list(names.values()) if isinstance(names, dict) else list(names or [])
@@ -201,8 +217,7 @@ class YoloObstacleDetector:
             model = self._get_model()
             # The first predict() fuses layers and allocates buffers; pay that here too.
             with self._inference_lock:
-                model.predict(source=np.zeros((480, 640, 3), dtype=np.uint8),
-                              conf=self.confidence, verbose=False, device="cpu")
+                model.predict(source=np.zeros((480, 640, 3), dtype=np.uint8), **self._predict_options())
             logger.info("YOLO model %r loaded", self.model_name)
         except Exception:  # noqa: BLE001 - /detect will surface the real error later
             logger.exception("YOLO model %r failed to preload", self.model_name)
@@ -214,10 +229,10 @@ class YoloObstacleDetector:
 
         with self._inference_lock:
             results = self._get_model().predict(
-                source=np.asarray(rgb_image),
-                conf=self.confidence,
-                verbose=False,
-                device="cpu",
+                # Ultralytics interprets PIL as RGB, numpy as BGR. Passing an
+                # RGB ndarray here silently swapped red/blue in preprocessing.
+                source=rgb_image,
+                **self._predict_options(),
             )
 
         objects: list[dict[str, Any]] = []

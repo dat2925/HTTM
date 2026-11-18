@@ -5,7 +5,7 @@ enum DetectionMode { auto, device, server }
 class AiConfig {
   AiConfig._();
 
-  /// Read the server URL from the .env file.
+  /// Read the server URL from the .env.example file.
   static String get serverUrl {
     const override = String.fromEnvironment('AI_SERVER_URL');
     return (override.isNotEmpty
@@ -29,7 +29,7 @@ class AiConfig {
   static const defaultDeviceModel = 'httm_yolo11n_ft20.tflite';
 
   /// File name inside assets/models/, chosen with DEVICE_MODEL. Like the rest
-  /// of .env it is bundled at build time, so switching models needs a rebuild.
+  /// of .env.example it is bundled at build time, so switching models needs a rebuild.
   static String get deviceModel {
     const override = String.fromEnvironment('DEVICE_MODEL');
     final value = override.isNotEmpty
@@ -45,6 +45,30 @@ class AiConfig {
   }
 
   static String get deviceModelAsset => 'assets/models/$deviceModel';
+  static double get deviceConfidence => probabilitySetting(
+    const String.fromEnvironment('DEVICE_CONFIDENCE'),
+    dotenv.isInitialized ? dotenv.env['DEVICE_CONFIDENCE'] : null,
+    .35,
+  );
+  static double get deviceIou => probabilitySetting(
+    const String.fromEnvironment('DEVICE_IOU'),
+    dotenv.isInitialized ? dotenv.env['DEVICE_IOU'] : null,
+    .45,
+  );
+
+  static double probabilitySetting(
+    String override,
+    String? value,
+    double fallback,
+  ) {
+    final parsed = double.tryParse(
+      override.isNotEmpty ? override : value ?? '',
+    );
+    return parsed != null && parsed.isFinite && parsed > 0 && parsed <= 1
+        ? parsed
+        : fallback;
+  }
+
   static const deviceCaptureInterval = Duration(milliseconds: 500);
   static const Duration captureInterval = Duration(milliseconds: 900);
   static const Duration requestTimeout = Duration(seconds: 20);

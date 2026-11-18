@@ -72,12 +72,19 @@ class ObstacleReasoningService {
     'traffic_light': 'đèn giao thông',
   };
 
-  ObstacleWarning? selectWarning(List<DetectedObject> objects) {
+  ObstacleWarning? selectWarning(
+    List<DetectedObject> objects, {
+    double Function(DetectedObject)? priority,
+  }) {
     if (objects.isEmpty) return null;
     final ranked = List<DetectedObject>.of(objects)
       ..sort((a, b) {
-        final priority = _priority(b).compareTo(_priority(a));
-        return priority != 0 ? priority : a.className.compareTo(b.className);
+        final score = priority == null
+            ? _priority(b).compareTo(_priority(a))
+            : priority(b).compareTo(priority(a));
+        if (score != 0) return score;
+        final name = a.className.compareTo(b.className);
+        return name != 0 ? name : (a.trackId ?? 0).compareTo(b.trackId ?? 0);
       });
     final selected = ranked.first;
     final name = _vietnameseNames[selected.className] ?? 'vật cản';
@@ -104,7 +111,7 @@ class ObstacleReasoningService {
 
     final speech = switch ((selected.position, selected.danger)) {
       ('center', DangerLevel.high) =>
-        'Có $name ngay phía trước. Dừng lại kiểm tra.',
+        'Có $name phía trước. Dừng lại kiểm tra.',
       ('left', _) => 'Có $name bên trái.',
       ('right', _) => 'Có $name bên phải.',
       _ => 'Có $name phía trước.',

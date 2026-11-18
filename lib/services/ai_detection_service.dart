@@ -78,7 +78,7 @@ class AiDetectionService implements ObstacleDetector {
   Future<DetectionResult> _detect(XFile image, Completer<void> abort) async {
     final request = http.AbortableMultipartRequest(
       'POST',
-      Uri.parse('${AiConfig.serverUrl}/detect'),
+      Uri.parse('${AiConfig.serverUrl}/detect?diagnostics=true'),
       abortTrigger: abort.future,
     );
     request.files.add(

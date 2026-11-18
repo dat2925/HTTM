@@ -7,7 +7,7 @@ import 'screens/home_screen.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await dotenv.load(fileName: '.env', isOptional: true);
+  await dotenv.load(fileName: '.env.example', isOptional: true);
 
   runApp(const SmartNavigationApp());
 }

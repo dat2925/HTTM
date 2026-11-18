@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:async';
 
 import 'package:camera/camera.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -39,6 +40,20 @@ class FakeYoloEngine implements YoloEngine {
   @override
   Future<void> dispose() async {
     disposals++;
+  }
+}
+
+class DeferredYoloEngine extends FakeYoloEngine {
+  final entered = Completer<void>();
+  final reply = Completer<Map<String, dynamic>>();
+  @override
+  Future<Map<String, dynamic>> predict(
+    Uint8List bytes, {
+    required double confidence,
+    required double iou,
+  }) {
+    entered.complete();
+    return reply.future;
   }
 }
 
@@ -84,6 +99,32 @@ Uint8List exifJpeg(int orientation, {bool little = true}) {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+    'native prediction is single-flight and dispose drains active work',
+    () async {
+      final engine = DeferredYoloEngine();
+      final detector = OnDeviceDetector(engine: engine);
+      final image = XFile.fromData(Uint8List.fromList([1, 2]));
+      final prediction = detector.detect(image);
+      await engine.entered.future;
+      await expectLater(
+        detector.detect(image),
+        throwsA(isA<AiDetectionException>()),
+      );
+      final disposal = detector.dispose();
+      await Future<void>.delayed(Duration.zero);
+      expect(engine.disposals, 0);
+      engine.reply.complete(engine.result);
+      await prediction;
+      await disposal;
+      expect(engine.disposals, 1);
+      await expectLater(
+        detector.detect(image),
+        throwsA(isA<AiDetectionException>()),
+      );
+    },
+  );
 
   test('mapping preserves order, drops unknowns, scales and rounds', () async {
     final engine = FakeYoloEngine();
